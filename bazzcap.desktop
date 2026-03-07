@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=BazzCap
+Comment=Screenshot & Recording Tool for Linux
+Exec=python3 -m bazzcap
+Icon=camera-photo
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+Keywords=screenshot;capture;recording;gif;annotation;
+StartupNotify=true
+StartupWMClass=bazzcap
