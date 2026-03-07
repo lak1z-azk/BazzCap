@@ -352,14 +352,14 @@ class MainWindow(QMainWindow):
             return f"Hotkey: {display}"
         return "No hotkey configured"
 
-    def _start_capture(self, mode: str, cursor_pos=None):
+    def _start_capture(self, mode: str):
         self._was_visible = self.isVisible()
         self.hide()
         QApplication.processEvents()
 
-        QTimer.singleShot(250, lambda: self._do_overlay_capture(mode, cursor_pos))
+        QTimer.singleShot(250, lambda: self._do_overlay_capture(mode))
 
-    def _do_overlay_capture(self, mode: str, cursor_pos=None):
+    def _do_overlay_capture(self, mode: str):
         self._status.showMessage("Grabbing screen...")
 
         screenshot = grab_screenshot_via_portal()
@@ -376,16 +376,9 @@ class MainWindow(QMainWindow):
             "window": RegionCaptureOverlay.MODE_REGION,
         }.get(mode, RegionCaptureOverlay.MODE_REGION)
 
-        self._overlay = RegionCaptureOverlay(screenshot, overlay_mode,
-                                              cursor_pos=cursor_pos)
+        self._overlay = RegionCaptureOverlay(screenshot, overlay_mode)
         self._overlay.capture_completed.connect(self._on_overlay_captured)
         self._overlay.capture_cancelled.connect(self._on_overlay_cancelled)
-
-        target = self._overlay._target_screen
-        if target:
-            self._overlay.winId()
-            if self._overlay.windowHandle():
-                self._overlay.windowHandle().setScreen(target)
         self._overlay.showFullScreen()
 
     def _on_overlay_captured(self, pixmap: QPixmap):
@@ -584,7 +577,7 @@ class SystemTray(QSystemTrayIcon):
 
 
 class _HotkeyBridge(QObject):
-    trigger = pyqtSignal(str, object)
+    trigger = pyqtSignal(str)
 
 
 class BazzCapApp:
@@ -600,7 +593,7 @@ class BazzCapApp:
 
         self._hotkey_bridge = _HotkeyBridge()
         self._hotkey_bridge.trigger.connect(
-            lambda name, pos: self._on_hotkey_triggered(name, pos)
+            lambda name: self._on_hotkey_triggered(name)
         )
 
         self.main_window = MainWindow(self.config, self.history)
@@ -637,7 +630,7 @@ class BazzCapApp:
             combo = hotkeys.get(name, "")
             if combo:
                 def make_callback(n):
-                    return lambda cursor_pos=None: self._hotkey_bridge.trigger.emit(n, cursor_pos)
+                    return lambda: self._hotkey_bridge.trigger.emit(n)
                 self.hotkey_manager.register(name, combo, make_callback(name))
 
         try:
@@ -645,11 +638,11 @@ class BazzCapApp:
         except Exception:
             pass
 
-    def _on_hotkey_triggered(self, name: str, cursor_pos=None):
+    def _on_hotkey_triggered(self, name: str):
         action_map = {
-            "capture_fullscreen": lambda: self.main_window._start_capture("fullscreen", cursor_pos),
-            "capture_region": lambda: self.main_window._start_capture("region", cursor_pos),
-            "capture_window": lambda: self.main_window._start_capture("window", cursor_pos),
+            "capture_fullscreen": lambda: self.main_window._start_capture("fullscreen"),
+            "capture_region": lambda: self.main_window._start_capture("region"),
+            "capture_window": lambda: self.main_window._start_capture("window"),
         }
         action = action_map.get(name)
         if action:
