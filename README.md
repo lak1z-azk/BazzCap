@@ -28,8 +28,7 @@ When capturing a region, an overlay appears across the full screen. You can draw
 - **Highlight** -- Draw translucent highlights over content.
 - **Numbered** -- Place numbered circles (auto-incrementing) with auto-contrast text color.
 
-
-
+<img width="698" height="55" alt="image" src="https://github.com/user-attachments/assets/28d9a4f5-dd5b-40d9-9b6f-3b77348d295d" />
 
 All annotations can be dragged to reposition them after placement. Hover over an annotation and press DEL to remove it. After selecting a region, the annotated screenshot is saved automatically and copied to the clipboard.
 
@@ -46,10 +45,6 @@ Global keyboard shortcuts are registered with your desktop environment (GNOME or
 | Window Capture     | Alt+Print      |
 
 Hotkeys are fully customizable from the settings dialog inside BazzCap.
-
-<img width="698" height="55" alt="image" src="https://github.com/user-attachments/assets/28d9a4f5-dd5b-40d9-9b6f-3b77348d295d" />
-
-
 
 ### System Tray
 BazzCap runs in the system tray. Right-click the tray icon to quickly start a capture, open settings, configure hotkeys, or quit. Double-click the tray icon to open the main window. Middle-click to start a region capture instantly. The main window can be minimized to tray on close.
