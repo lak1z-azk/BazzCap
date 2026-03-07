@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""BazzCap launcher script."""
 
 from bazzcap.app import BazzCapApp
 import sys

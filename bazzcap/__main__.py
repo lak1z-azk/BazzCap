@@ -1,4 +1,3 @@
-"""BazzCap entry point."""
 
 import sys
 from bazzcap.app import BazzCapApp

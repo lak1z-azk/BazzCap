@@ -1,14 +1,7 @@
-"""BazzCap main application — capture & recording experience for Linux.
-
-Complete rewrite using custom overlay for region/window/fullscreen capture
-instead of delegating to system screenshot tools.
-"""
 
 import sys
 import os
-import time
 import subprocess
-import tempfile
 from functools import partial
 
 from PyQt6.QtWidgets import (
@@ -30,17 +23,13 @@ from PyQt6.QtGui import (
 
 from bazzcap.config import Config
 from bazzcap.overlay import RegionCaptureOverlay, grab_screenshot_via_portal
-from bazzcap.recorder import ScreenRecorder, RecordingState
 from bazzcap.clipboard import copy_image_to_clipboard
 from bazzcap.history import HistoryManager, HistoryEntry
 from bazzcap.hotkeys import HotkeyManager
 from bazzcap.hotkey_settings import HotkeySettingsDialog
 
 
-# ─── Settings Dialog ────────────────────────────────────────────────────────
-
 class SettingsDialog(QDialog):
-    """Application settings dialog."""
 
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
@@ -52,7 +41,6 @@ class SettingsDialog(QDialog):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # General
         general = QGroupBox("General")
         form = QFormLayout()
 
@@ -89,32 +77,13 @@ class SettingsDialog(QDialog):
         self._minimize_tray.setChecked(self._config.get("minimize_to_tray", True))
         form.addRow(self._minimize_tray)
 
+        self._start_with_system = QCheckBox("Start with system (autostart on login)")
+        self._start_with_system.setChecked(self._is_autostart_enabled())
+        form.addRow(self._start_with_system)
+
         general.setLayout(form)
         layout.addWidget(general)
 
-        # Recording
-        recording = QGroupBox("Recording")
-        rec_form = QFormLayout()
-
-        self._rec_fps = QSpinBox()
-        self._rec_fps.setRange(10, 120)
-        self._rec_fps.setValue(self._config.get("recording_fps", 30))
-        rec_form.addRow("Recording FPS:", self._rec_fps)
-
-        self._gif_fps = QSpinBox()
-        self._gif_fps.setRange(5, 30)
-        self._gif_fps.setValue(self._config.get("gif_fps", 15))
-        rec_form.addRow("GIF FPS:", self._gif_fps)
-
-        self._gif_width = QSpinBox()
-        self._gif_width.setRange(320, 3840)
-        self._gif_width.setValue(self._config.get("gif_max_width", 640))
-        rec_form.addRow("GIF max width:", self._gif_width)
-
-        recording.setLayout(rec_form)
-        layout.addWidget(recording)
-
-        # Editor
         editor = QGroupBox("Annotation Editor")
         ed_form = QFormLayout()
 
@@ -136,7 +105,6 @@ class SettingsDialog(QDialog):
         editor.setLayout(ed_form)
         layout.addWidget(editor)
 
-        # Buttons
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save |
             QDialogButtonBox.StandardButton.Cancel
@@ -158,29 +126,51 @@ class SettingsDialog(QDialog):
         self._config.set("show_magnifier", self._show_magnifier.isChecked())
         self._config.set("image_format", self._format.currentText())
         self._config.set("minimize_to_tray", self._minimize_tray.isChecked())
-        self._config.set("recording_fps", self._rec_fps.value())
-        self._config.set("gif_fps", self._gif_fps.value())
-        self._config.set("gif_max_width", self._gif_width.value())
+        self._config.set("start_with_system", self._start_with_system.isChecked())
+        self._set_autostart(self._start_with_system.isChecked())
         self._config.set("editor.default_line_width", self._line_width.value())
         self._config.set("editor.default_font_size", self._font_size.value())
         self._config.set("editor.blur_radius", self._blur_radius.value())
         self._config.save()
         self.accept()
 
+    _AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
+    _AUTOSTART_FILE = os.path.join(_AUTOSTART_DIR, "bazzcap.desktop")
+    _BIN_PATH = os.path.expanduser("~/.local/bin/bazzcap")
 
-# ─── Main Dashboard Window ──────────────────────────────────────────────────
+    def _is_autostart_enabled(self) -> bool:
+        return os.path.isfile(self._AUTOSTART_FILE)
+
+    def _set_autostart(self, enabled: bool):
+        if enabled:
+            os.makedirs(self._AUTOSTART_DIR, exist_ok=True)
+            entry = (
+                "[Desktop Entry]\n"
+                "Name=BazzCap\n"
+                "Comment=Screenshot Tool\n"
+                f"Exec={self._BIN_PATH}\n"
+                "Icon=bazzcap\n"
+                "Terminal=false\n"
+                "Type=Application\n"
+                "X-GNOME-Autostart-enabled=true\n"
+                "Hidden=false\n"
+            )
+            with open(self._AUTOSTART_FILE, "w") as f:
+                f.write(entry)
+            os.chmod(self._AUTOSTART_FILE, 0o755)
+        else:
+            if os.path.isfile(self._AUTOSTART_FILE):
+                os.remove(self._AUTOSTART_FILE)
+
 
 class MainWindow(QMainWindow):
-    """BazzCap main window."""
 
-    capture_requested = pyqtSignal(str)  # mode string
+    capture_requested = pyqtSignal(str)
 
-    def __init__(self, config: Config, history: HistoryManager,
-                 recorder: ScreenRecorder, parent=None):
+    def __init__(self, config: Config, history: HistoryManager, parent=None):
         super().__init__(parent)
         self._config = config
         self._history = history
-        self._recorder = recorder
         self._editor_windows = []
         self._overlay = None
 
@@ -190,12 +180,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._refresh_history()
 
-        # Recording timer
-        self._rec_timer = QTimer(self)
-        self._rec_timer.timeout.connect(self._update_rec_timer)
-
     def _apply_dark_theme(self):
-        """Apply BazzCap's dark theme."""
         self.setStyleSheet("""
             QMainWindow, QWidget {
                 background-color: #1e1e2e;
@@ -264,7 +249,6 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 8)
 
-        # ── Header ──
         header_layout = QHBoxLayout()
 
         title_layout = QVBoxLayout()
@@ -273,14 +257,13 @@ class MainWindow(QMainWindow):
         header.setStyleSheet("color: #89b4fa;")
         title_layout.addWidget(header)
 
-        subtitle = QLabel("Screenshot & Recording for Linux")
+        subtitle = QLabel("Screenshot Tool for Linux")
         subtitle.setStyleSheet("color: #6c7086; font-size: 12px;")
         title_layout.addWidget(subtitle)
 
         header_layout.addLayout(title_layout)
         header_layout.addStretch()
 
-        # Quick settings buttons
         btn_settings = QPushButton("Settings")
         btn_settings.setFixedHeight(36)
         btn_settings.clicked.connect(lambda: self._show_settings())
@@ -293,7 +276,6 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(header_layout)
 
-        # ── Capture Buttons ──
         capture_group = QGroupBox("Capture")
         capture_layout = QGridLayout()
         capture_layout.setSpacing(8)
@@ -325,34 +307,6 @@ class MainWindow(QMainWindow):
         capture_group.setLayout(capture_layout)
         layout.addWidget(capture_group)
 
-        # ── Recording Buttons ──
-        rec_group = QGroupBox("Recording")
-        rec_layout = QHBoxLayout()
-        rec_layout.setSpacing(8)
-
-        self._btn_record = QPushButton("Start Video Recording")
-        self._btn_record.setMinimumHeight(50)
-        self._btn_record.setToolTip(self._hotkey_tip("start_recording"))
-        self._btn_record.clicked.connect(self._toggle_recording)
-        rec_layout.addWidget(self._btn_record)
-
-        self._btn_gif = QPushButton("Record GIF")
-        self._btn_gif.setMinimumHeight(50)
-        self._btn_gif.setToolTip(self._hotkey_tip("start_gif"))
-        self._btn_gif.clicked.connect(self._toggle_gif_recording)
-        rec_layout.addWidget(self._btn_gif)
-
-        self._rec_label = QLabel("")
-        self._rec_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._rec_label.setStyleSheet(
-            "color: #f38ba8; font-weight: bold; font-size: 16px; min-width: 100px;"
-        )
-        rec_layout.addWidget(self._rec_label)
-
-        rec_group.setLayout(rec_layout)
-        layout.addWidget(rec_group)
-
-        # ── History ──
         history_group = QGroupBox("Recent Captures")
         hist_layout = QVBoxLayout()
 
@@ -379,7 +333,6 @@ class MainWindow(QMainWindow):
         history_group.setLayout(hist_layout)
         layout.addWidget(history_group)
 
-        # ── Status Bar ──
         self._status = QStatusBar()
         self.setStatusBar(self._status)
 
@@ -390,7 +343,6 @@ class MainWindow(QMainWindow):
         )
 
     def _hotkey_tip(self, name: str) -> str:
-        """Get tooltip showing the configured hotkey."""
         hotkeys = self._config.get("hotkeys", {})
         hk = hotkeys.get(name, "")
         if hk:
@@ -400,26 +352,16 @@ class MainWindow(QMainWindow):
             return f"Hotkey: {display}"
         return "No hotkey configured"
 
-    # ── Capture Flow ──
-
     def _start_capture(self, mode: str, cursor_pos=None):
-        """Start the capture process:
-        1. Hide main window if visible
-        2. Grab screen via portal
-        3. Show custom overlay
-        """
         self._was_visible = self.isVisible()
         self.hide()
         QApplication.processEvents()
 
-        # Small delay to ensure window is hidden
         QTimer.singleShot(250, lambda: self._do_overlay_capture(mode, cursor_pos))
 
     def _do_overlay_capture(self, mode: str, cursor_pos=None):
-        """Grab screen and show overlay."""
         self._status.showMessage("Grabbing screen...")
 
-        # Grab the full screen
         screenshot = grab_screenshot_via_portal()
 
         if screenshot is None or screenshot.isNull():
@@ -428,34 +370,25 @@ class MainWindow(QMainWindow):
             self._notify("Capture failed", "Could not grab screen")
             return
 
-        # Map mode string to overlay mode
         overlay_mode = {
             "fullscreen": RegionCaptureOverlay.MODE_FULLSCREEN,
             "region": RegionCaptureOverlay.MODE_REGION,
-            "window": RegionCaptureOverlay.MODE_REGION,  # window = region select
+            "window": RegionCaptureOverlay.MODE_REGION,
         }.get(mode, RegionCaptureOverlay.MODE_REGION)
 
-        # Create overlay — pass cursor_pos so it knows which screen to use.
-        # QCursor.pos() doesn't work on Wayland without a visible window,
-        # so the cursor position is captured at hotkey trigger time via xdotool.
         self._overlay = RegionCaptureOverlay(screenshot, overlay_mode,
                                               cursor_pos=cursor_pos)
         self._overlay.capture_completed.connect(self._on_overlay_captured)
         self._overlay.capture_cancelled.connect(self._on_overlay_cancelled)
 
-        # Place overlay on the correct screen on Wayland:
-        # 1. Force native window creation via winId()
-        # 2. Set the QWindow's screen BEFORE showing
-        # 3. Then showFullScreen() goes to the right monitor
         target = self._overlay._target_screen
         if target:
-            self._overlay.winId()  # force native window handle
+            self._overlay.winId()
             if self._overlay.windowHandle():
                 self._overlay.windowHandle().setScreen(target)
         self._overlay.showFullScreen()
 
     def _on_overlay_captured(self, pixmap: QPixmap):
-        """Handle capture from the overlay — auto-save + auto-clipboard."""
         if self._overlay:
             self._overlay.close()
             self._overlay.deleteLater()
@@ -466,22 +399,18 @@ class MainWindow(QMainWindow):
                 self.show()
             return
 
-        # Save the capture
         path = self._config.generate_filepath()
         ext = self._config.get("image_format", "png").upper()
         quality = 95 if ext in ("JPG", "JPEG") else -1
         pixmap.save(path, ext, quality)
 
         if os.path.isfile(path):
-            # Add to history
             entry = HistoryEntry.create(path, "screenshot", "region")
             self._history.add(entry)
             self._refresh_history()
 
-            # Auto-clipboard
             copy_image_to_clipboard(path)
 
-            # Notification
             self._notify("Screenshot saved & copied",
                          os.path.basename(path))
 
@@ -489,25 +418,19 @@ class MainWindow(QMainWindow):
         else:
             self._status.showMessage("Failed to save capture!")
 
-        # Only re-show the main window if it was visible before capture
         if getattr(self, '_was_visible', False):
             self.show()
 
     def _on_overlay_cancelled(self):
-        """Handle overlay cancellation."""
         if self._overlay:
             self._overlay.close()
             self._overlay.deleteLater()
             self._overlay = None
-        # Only re-show the main window if it was visible before capture
         if getattr(self, '_was_visible', False):
             self.show()
         self._status.showMessage("Capture cancelled")
 
-    # ── Editor ──
-
     def _open_editor(self, path: str):
-        """Open the annotation editor (for history items)."""
         try:
             from bazzcap.editor import AnnotationEditor
             editor = AnnotationEditor(path, self._config)
@@ -523,92 +446,10 @@ class MainWindow(QMainWindow):
             copy_image_to_clipboard(path)
         self.show()
 
-    # ── Recording ──
-
-    def _toggle_recording(self):
-        if self._recorder.is_recording:
-            path = self._recorder.stop_recording()
-            self._rec_timer.stop()
-            self._rec_label.setText("")
-            self._btn_record.setText("Start Video Recording")
-            self._btn_gif.setEnabled(True)
-
-            if path:
-                entry = HistoryEntry.create(path, "recording")
-                self._history.add(entry)
-                self._refresh_history()
-                self._notify("Recording saved", os.path.basename(path))
-        else:
-            path = self._config.generate_filepath("mp4")
-            self.hide()
-            QApplication.processEvents()
-            QTimer.singleShot(300, lambda: self._start_recording(path))
-
-    def _start_recording(self, path):
-        success = self._recorder.start_recording(path)
-        if success:
-            self._btn_record.setText("Stop Recording")
-            self._btn_gif.setEnabled(False)
-            self._rec_timer.start(1000)
-            self.show()
-        else:
-            self.show()
-            self._status.showMessage("Recording failed! Is FFmpeg installed?")
-
-    def _toggle_gif_recording(self):
-        if self._recorder.is_recording:
-            video_path = self._recorder.stop_recording()
-            self._rec_timer.stop()
-            self._rec_label.setText("")
-            self._btn_gif.setText("Record GIF")
-            self._btn_record.setEnabled(True)
-
-            if video_path:
-                self._status.showMessage("Converting to GIF...")
-                self._recorder.convert_to_gif(video_path, callback=self._on_gif_done)
-        else:
-            path = self._config.generate_filepath("mp4")
-            self.hide()
-            QApplication.processEvents()
-            QTimer.singleShot(300, lambda: self._start_gif_recording(path))
-
-    def _start_gif_recording(self, path):
-        success = self._recorder.start_recording(path)
-        if success:
-            self._btn_gif.setText("Stop & Convert to GIF")
-            self._btn_record.setEnabled(False)
-            self._rec_timer.start(1000)
-            self.show()
-        else:
-            self.show()
-            self._status.showMessage("Recording failed!")
-
-    def _on_gif_done(self, gif_path, error):
-        QTimer.singleShot(0, lambda: self._handle_gif_done(gif_path, error))
-
-    def _handle_gif_done(self, gif_path, error):
-        if gif_path:
-            entry = HistoryEntry.create(gif_path, "gif")
-            self._history.add(entry)
-            self._refresh_history()
-            self._notify("GIF saved", os.path.basename(gif_path))
-            self._status.showMessage(f"GIF saved: {gif_path}")
-        else:
-            self._status.showMessage(f"GIF conversion failed: {error}")
-
-    def _update_rec_timer(self):
-        elapsed = int(self._recorder.elapsed)
-        mins, secs = elapsed // 60, elapsed % 60
-        self._rec_label.setText(f"REC  {mins:02d}:{secs:02d}")
-
-    # ── History ──
-
     def _refresh_history(self):
         self._history_list.clear()
         for entry in self._history.entries[:50]:
-            icon = {"screenshot": "IMG", "recording": "VID", "gif": "GIF"}.get(
-                entry.capture_type, "FILE"
-            )
+            icon = {"screenshot": "IMG"}.get(entry.capture_type, "FILE")
             name = os.path.basename(entry.filepath)
             size_kb = entry.file_size / 1024
             ts = entry.timestamp[:19].replace("T", "  ")
@@ -638,8 +479,6 @@ class MainWindow(QMainWindow):
         self._history.clear()
         self._refresh_history()
 
-    # ── Settings ──
-
     def _show_settings(self):
         dialog = SettingsDialog(self._config, self)
         dialog.exec()
@@ -647,13 +486,10 @@ class MainWindow(QMainWindow):
     def _show_hotkey_settings(self):
         dialog = HotkeySettingsDialog(self._config, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Re-register GNOME shortcuts with updated bindings
             app_obj = QApplication.instance()
             if hasattr(app_obj, '_bazzcap_app') and hasattr(app_obj._bazzcap_app, '_reregister_hotkeys'):
                 app_obj._bazzcap_app._reregister_hotkeys()
             self._status.showMessage("Hotkeys updated and applied!")
-
-    # ── Notifications ──
 
     def _notify(self, title: str, message: str):
         try:
@@ -673,14 +509,9 @@ class MainWindow(QMainWindow):
             event.accept()
 
 
-# ─── System Tray ─────────────────────────────────────────────────────────────
-
 class SystemTray(QSystemTrayIcon):
-    """System tray with quick-access menu."""
 
-    capture_requested = pyqtSignal(str)  # mode
-    recording_requested = pyqtSignal()
-    gif_requested = pyqtSignal()
+    capture_requested = pyqtSignal(str)
     show_requested = pyqtSignal()
     settings_requested = pyqtSignal()
     hotkey_settings_requested = pyqtSignal()
@@ -698,11 +529,9 @@ class SystemTray(QSystemTrayIcon):
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # Blue circle
         painter.setBrush(QBrush(QColor(137, 180, 250)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(1, 1, 30, 30)
-        # "B" letter
         painter.setPen(QPen(QColor(30, 30, 46)))
         font = QFont("Sans", 16, QFont.Weight.Bold)
         painter.setFont(font)
@@ -737,9 +566,6 @@ class SystemTray(QSystemTrayIcon):
         menu.addAction("Region Capture", lambda: self.capture_requested.emit("region"))
         menu.addAction("Window Capture", lambda: self.capture_requested.emit("window"))
         menu.addSeparator()
-        menu.addAction("Record Video", lambda: self.recording_requested.emit())
-        menu.addAction("Record GIF", lambda: self.gif_requested.emit())
-        menu.addSeparator()
         menu.addAction("Show BazzCap", lambda: self.show_requested.emit())
         menu.addAction("Settings", lambda: self.settings_requested.emit())
         menu.addAction("Hotkeys", lambda: self.hotkey_settings_requested.emit())
@@ -752,67 +578,35 @@ class SystemTray(QSystemTrayIcon):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.show_requested.emit()
         elif reason == QSystemTrayIcon.ActivationReason.Trigger:
-            # Single click — do nothing (RMB context menu handles actions)
             pass
         elif reason == QSystemTrayIcon.ActivationReason.MiddleClick:
             self.capture_requested.emit("region")
 
-    def update_recording_state(self, recording: bool):
-        if recording:
-            pixmap = QPixmap(32, 32)
-            pixmap.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setBrush(QBrush(QColor(243, 139, 168)))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(1, 1, 30, 30)
-            painter.end()
-            self.setIcon(QIcon(pixmap))
-            self.setToolTip("BazzCap — Recording...")
-        else:
-            self._create_icon()
-            self.setToolTip("BazzCap")
-
-
-# ─── Application Controller ─────────────────────────────────────────────────
-
-# ─── Thread-safe hotkey bridge ───────────────────────────────────────────────
 
 class _HotkeyBridge(QObject):
-    """Bridge to invoke hotkey callbacks on the Qt main thread."""
-    trigger = pyqtSignal(str, object)  # name, cursor_pos (tuple or None)
+    trigger = pyqtSignal(str, object)
 
 
 class BazzCapApp:
-    """Main application controller."""
 
     def __init__(self):
         self.app = QApplication(sys.argv)
         self.app.setApplicationName("BazzCap")
         self.app.setQuitOnLastWindowClosed(False)
 
-        # Core
         self.config = Config()
         self.history = HistoryManager()
-        self.recorder = ScreenRecorder(self.config)
         self.hotkey_manager = HotkeyManager()
 
-        self.recorder.set_callbacks(on_state_change=self._on_rec_state_change)
-
-        # Hotkey bridge for thread-safe signaling
         self._hotkey_bridge = _HotkeyBridge()
         self._hotkey_bridge.trigger.connect(
             lambda name, pos: self._on_hotkey_triggered(name, pos)
         )
 
-        # UI
-        self.main_window = MainWindow(self.config, self.history, self.recorder)
+        self.main_window = MainWindow(self.config, self.history)
         self.tray = SystemTray()
 
-        # Connect tray signals
         self.tray.capture_requested.connect(self._tray_capture)
-        self.tray.recording_requested.connect(self.main_window._toggle_recording)
-        self.tray.gif_requested.connect(self.main_window._toggle_gif_recording)
         self.tray.show_requested.connect(self._show_window)
         self.tray.settings_requested.connect(self.main_window._show_settings)
         self.tray.hotkey_settings_requested.connect(self.main_window._show_hotkey_settings)
@@ -821,15 +615,12 @@ class BazzCapApp:
         self.tray.show()
         self._setup_hotkeys()
 
-        # Store ref so MainWindow can trigger re-registration
         self.app._bazzcap_app = self
 
     def _reregister_hotkeys(self):
-        """Re-register global hotkeys after settings change."""
         hotkeys = self.config.get("hotkeys", {})
         new_bindings = {}
-        for name in ["capture_fullscreen", "capture_region", "capture_window",
-                     "start_recording", "start_gif"]:
+        for name in ["capture_fullscreen", "capture_region", "capture_window"]:
             combo = hotkeys.get(name, "")
             if combo:
                 new_bindings[name] = combo
@@ -838,16 +629,13 @@ class BazzCapApp:
     def _setup_hotkeys(self):
         hotkeys = self.config.get("hotkeys", {})
 
-        # All callbacks go through the bridge to ensure main-thread execution
         all_names = [
             "capture_fullscreen", "capture_region", "capture_window",
-            "start_recording", "start_gif",
         ]
 
         for name in all_names:
             combo = hotkeys.get(name, "")
             if combo:
-                # Use a factory to capture 'name' correctly in the closure
                 def make_callback(n):
                     return lambda cursor_pos=None: self._hotkey_bridge.trigger.emit(n, cursor_pos)
                 self.hotkey_manager.register(name, combo, make_callback(name))
@@ -858,13 +646,10 @@ class BazzCapApp:
             pass
 
     def _on_hotkey_triggered(self, name: str, cursor_pos=None):
-        """Handle hotkey trigger on the main thread."""
         action_map = {
             "capture_fullscreen": lambda: self.main_window._start_capture("fullscreen", cursor_pos),
             "capture_region": lambda: self.main_window._start_capture("region", cursor_pos),
             "capture_window": lambda: self.main_window._start_capture("window", cursor_pos),
-            "start_recording": lambda: self.main_window._toggle_recording(),
-            "start_gif": lambda: self.main_window._toggle_gif_recording(),
         }
         action = action_map.get(name)
         if action:
@@ -878,12 +663,7 @@ class BazzCapApp:
         self.main_window.raise_()
         self.main_window.activateWindow()
 
-    def _on_rec_state_change(self, state: RecordingState):
-        self.tray.update_recording_state(state == RecordingState.RECORDING)
-
     def _quit(self):
-        if self.recorder.is_recording:
-            self.recorder.stop_recording()
         self.hotkey_manager.stop()
         self.tray.hide()
         self.app.quit()

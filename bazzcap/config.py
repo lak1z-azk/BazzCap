@@ -14,16 +14,12 @@ DEFAULT_CONFIG = {
     "show_notification": True,
     "image_format": "png",
     "jpeg_quality": 95,
-    "recording_format": "mp4",
-    "recording_fps": 30,
-    "gif_fps": 15,
-    "gif_max_width": 640,
+
     "hotkeys": {
         "capture_fullscreen": "Print",
         "capture_region": "<Ctrl>Print",
         "capture_window": "<Alt>Print",
-        "start_recording": "<Ctrl><Shift>Print",
-        "start_gif": "<Ctrl><Alt>Print",
+
     },
     "editor": {
         "default_color": "#FF0000",
@@ -34,6 +30,7 @@ DEFAULT_CONFIG = {
     },
     "minimize_to_tray": True,
     "start_minimized": True,
+    "start_with_system": True,
     "theme": "system",
 }
 
