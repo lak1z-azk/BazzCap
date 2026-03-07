@@ -352,14 +352,32 @@ class MainWindow(QMainWindow):
             return f"Hotkey: {display}"
         return "No hotkey configured"
 
-    def _start_capture(self, mode: str):
+    def _start_capture(self, mode: str, cursor_pos=None):
         self._was_visible = self.isVisible()
         self.hide()
         QApplication.processEvents()
 
-        QTimer.singleShot(250, lambda: self._do_overlay_capture(mode))
+        if cursor_pos is None:
+            cursor_pos = self._get_cursor_pos()
 
-    def _do_overlay_capture(self, mode: str):
+        QTimer.singleShot(250, lambda: self._do_overlay_capture(mode, cursor_pos))
+
+    @staticmethod
+    def _get_cursor_pos():
+        import subprocess, re
+        try:
+            r = subprocess.run(
+                ["xdotool", "getmouselocation"],
+                capture_output=True, text=True, timeout=3,
+            )
+            m = re.search(r"x:(\d+) y:(\d+)", r.stdout or "")
+            if m:
+                return (int(m.group(1)), int(m.group(2)))
+        except (subprocess.SubprocessError, OSError, FileNotFoundError):
+            pass
+        return None
+
+    def _do_overlay_capture(self, mode: str, cursor_pos=None):
         self._status.showMessage("Grabbing screen...")
 
         screenshot = grab_screenshot_via_portal()
@@ -376,16 +394,37 @@ class MainWindow(QMainWindow):
             "window": RegionCaptureOverlay.MODE_REGION,
         }.get(mode, RegionCaptureOverlay.MODE_REGION)
 
-        self._overlay = RegionCaptureOverlay(screenshot, overlay_mode)
-        self._overlay.capture_completed.connect(self._on_overlay_captured)
-        self._overlay.capture_cancelled.connect(self._on_overlay_cancelled)
-        self._overlay.showFullScreen()
+        self._overlays = []
+        screens = QGuiApplication.screens()
+        for scr in screens:
+            ov = RegionCaptureOverlay(screenshot, overlay_mode, screen=scr)
+            ov.capture_completed.connect(self._on_overlay_captured)
+            ov.capture_cancelled.connect(self._on_overlay_cancelled)
+            ov.overlay_activated.connect(self._on_overlay_activated)
+            self._overlays.append(ov)
+
+        for ov in self._overlays:
+            ov.winId()
+            ov.windowHandle().setScreen(ov._target_screen)
+            ov.showFullScreen()
+
+        self._overlay = None
+
+    def _on_overlay_activated(self, active_overlay):
+        """One overlay received interaction — close all others."""
+        self._overlay = active_overlay
+        for ov in self._overlays:
+            if ov is not active_overlay:
+                ov.deactivate()
+        self._overlays = [active_overlay]
 
     def _on_overlay_captured(self, pixmap: QPixmap):
-        if self._overlay:
-            self._overlay.close()
-            self._overlay.deleteLater()
-            self._overlay = None
+        for ov in getattr(self, '_overlays', []):
+            ov.hide()
+            ov.close()
+            ov.deleteLater()
+        self._overlays = []
+        self._overlay = None
 
         if pixmap.isNull():
             if getattr(self, '_was_visible', False):
@@ -415,10 +454,12 @@ class MainWindow(QMainWindow):
             self.show()
 
     def _on_overlay_cancelled(self):
-        if self._overlay:
-            self._overlay.close()
-            self._overlay.deleteLater()
-            self._overlay = None
+        for ov in getattr(self, '_overlays', []):
+            ov.hide()
+            ov.close()
+            ov.deleteLater()
+        self._overlays = []
+        self._overlay = None
         if getattr(self, '_was_visible', False):
             self.show()
         self._status.showMessage("Capture cancelled")
@@ -577,7 +618,7 @@ class SystemTray(QSystemTrayIcon):
 
 
 class _HotkeyBridge(QObject):
-    trigger = pyqtSignal(str)
+    trigger = pyqtSignal(str, object)
 
 
 class BazzCapApp:
@@ -593,7 +634,7 @@ class BazzCapApp:
 
         self._hotkey_bridge = _HotkeyBridge()
         self._hotkey_bridge.trigger.connect(
-            lambda name: self._on_hotkey_triggered(name)
+            lambda name, pos: self._on_hotkey_triggered(name, pos)
         )
 
         self.main_window = MainWindow(self.config, self.history)
@@ -630,7 +671,7 @@ class BazzCapApp:
             combo = hotkeys.get(name, "")
             if combo:
                 def make_callback(n):
-                    return lambda: self._hotkey_bridge.trigger.emit(n)
+                    return lambda cursor_pos=None: self._hotkey_bridge.trigger.emit(n, cursor_pos)
                 self.hotkey_manager.register(name, combo, make_callback(name))
 
         try:
@@ -638,11 +679,11 @@ class BazzCapApp:
         except Exception:
             pass
 
-    def _on_hotkey_triggered(self, name: str):
+    def _on_hotkey_triggered(self, name: str, cursor_pos=None):
         action_map = {
-            "capture_fullscreen": lambda: self.main_window._start_capture("fullscreen"),
-            "capture_region": lambda: self.main_window._start_capture("region"),
-            "capture_window": lambda: self.main_window._start_capture("window"),
+            "capture_fullscreen": lambda: self.main_window._start_capture("fullscreen", cursor_pos),
+            "capture_region": lambda: self.main_window._start_capture("region", cursor_pos),
+            "capture_window": lambda: self.main_window._start_capture("window", cursor_pos),
         }
         action = action_map.get(name)
         if action:

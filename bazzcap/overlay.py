@@ -506,6 +506,7 @@ class RegionCaptureOverlay(QWidget):
 
     capture_completed = pyqtSignal(QPixmap)
     capture_cancelled = pyqtSignal()
+    overlay_activated = pyqtSignal(object)
 
     MODE_REGION = "region"
     MODE_FULLSCREEN = "fullscreen"
@@ -514,14 +515,22 @@ class RegionCaptureOverlay(QWidget):
     PHASE_ANNOTATE = "annotate"
 
     def __init__(self, screenshot: QPixmap, mode: str = "region",
-                 parent=None):
+                 parent=None, screen=None):
         super().__init__(parent)
         self._mode = mode
-        self._full_screenshot = screenshot
-        self._screenshot = None
-        self._dimmed = None
-        self._target_screen = None
-        self._screen_ready = False
+        self._active = True
+
+        target = screen if screen else QGuiApplication.primaryScreen()
+        self._target_screen = target
+
+        screen_geo = target.geometry()
+        self._screen_geo = screen_geo
+
+        self._screenshot = screenshot.copy(
+            screen_geo.x(), screen_geo.y(),
+            screen_geo.width(), screen_geo.height(),
+        )
+        self._dimmed = self._create_dimmed(self._screenshot)
 
         self._phase = self.PHASE_SELECT
 
@@ -553,12 +562,12 @@ class RegionCaptureOverlay(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setCursor(Qt.CursorShape.CrossCursor)
 
-        self._magnifier = None
+        self._magnifier = MagnifierWidget(self._screenshot, self)
+        self._magnifier.hide()
 
         self._toolbar = AnnotationToolbar(self)
         self._toolbar.tool_selected.connect(self._on_tool_selected)
@@ -567,46 +576,17 @@ class RegionCaptureOverlay(QWidget):
         self._toolbar.undo_requested.connect(self._undo)
         self._toolbar.confirm_requested.connect(self._confirm)
         self._toolbar.cancel_requested.connect(self._cancel)
-        self._toolbar.hide()
-
-        self.setMouseTracking(True)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if not self._screen_ready:
-            QTimer.singleShot(50, self._init_for_screen)
-
-    def _init_for_screen(self):
-        if self._screen_ready:
-            return
-        self._screen_ready = True
-
-        screen = self.screen()
-        if screen is None:
-            screen = QGuiApplication.primaryScreen()
-        self._target_screen = screen
-        screen_geo = screen.geometry()
-
-        self._screenshot = self._full_screenshot.copy(
-            screen_geo.x(), screen_geo.y(),
-            screen_geo.width(), screen_geo.height(),
-        )
-        self._dimmed = self._create_dimmed(self._screenshot)
-
-        if self._magnifier:
-            self._magnifier.deleteLater()
-        self._magnifier = MagnifierWidget(self._screenshot, self)
-        self._magnifier.hide()
 
         tw = self._toolbar.sizeHint().width()
         self._toolbar.move((screen_geo.width() - tw) // 2, 6)
         self._toolbar.show()
         self._toolbar.raise_()
 
-        self.update()
+        self.setMouseTracking(True)
 
-        if self._mode == self.MODE_FULLSCREEN:
-            QTimer.singleShot(100, self._capture_fullscreen)
+        if mode == self.MODE_FULLSCREEN:
+            if len(QGuiApplication.screens()) <= 1:
+                QTimer.singleShot(100, self._capture_fullscreen)
 
     @staticmethod
     def _create_dimmed(pixmap: QPixmap) -> QPixmap:
@@ -632,11 +612,6 @@ class RegionCaptureOverlay(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        if not self._screen_ready or self._dimmed is None:
-            p.fillRect(self.rect(), QColor(0, 0, 0, 200))
-            p.end()
-            return
 
         p.drawPixmap(0, 0, self._dimmed)
 
@@ -914,10 +889,18 @@ class RegionCaptureOverlay(QWidget):
             margin = max(6, ann.width)
             return rect.adjusted(-margin, -margin, margin, margin)
 
+    def deactivate(self):
+        """Silently close this overlay (another screen was chosen)."""
+        self._active = False
+        self.hide()
+        self.close()
+        self.deleteLater()
+
     def mousePressEvent(self, event: QMouseEvent):
-        if not self._screen_ready:
+        if not self._active:
             return
         if event.button() == Qt.MouseButton.LeftButton:
+            self.overlay_activated.emit(self)
             pos = event.pos()
 
             # Check if clicking on an existing annotation to drag it
@@ -927,8 +910,7 @@ class RegionCaptureOverlay(QWidget):
                 self._dragging_ann = ann
                 self._dragging_ann_idx = hit_idx
                 self._drag_offset = pos - ann.start
-                if self._magnifier:
-                    self._magnifier.hide()
+                self._magnifier.hide()
                 return
 
             if self._phase == self.PHASE_SELECT:
@@ -938,8 +920,7 @@ class RegionCaptureOverlay(QWidget):
                     self._draw_start = pos
                     self._draw_end = pos
                     self._freehand_points = [pos]
-                    if self._magnifier:
-                        self._magnifier.hide()
+                    self._magnifier.hide()
                 else:
                     # Start region selection
                     self._selecting = True
@@ -947,8 +928,7 @@ class RegionCaptureOverlay(QWidget):
                     self._sel_end = pos
                     self._sel_rect = QRect()
                     self._has_selection = False
-                    if self._magnifier:
-                        self._magnifier.hide()
+                    self._magnifier.hide()
                     self.update()
 
             elif self._phase == self.PHASE_ANNOTATE:
@@ -969,8 +949,6 @@ class RegionCaptureOverlay(QWidget):
                 self._cancel()
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if not self._screen_ready:
-            return
         self._mouse_pos = event.pos()
 
         # Dragging an existing annotation
@@ -1008,15 +986,12 @@ class RegionCaptureOverlay(QWidget):
             self.update()
 
         elif self._phase == self.PHASE_SELECT and not self._selecting:
-            if self._magnifier:
-                self._magnifier.update_position(event.pos())
-                if not self._magnifier.isVisible():
-                    self._magnifier.show()
+            self._magnifier.update_position(event.pos())
+            if not self._magnifier.isVisible():
+                self._magnifier.show()
             self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if not self._screen_ready:
-            return
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
@@ -1171,7 +1146,7 @@ class RegionCaptureOverlay(QWidget):
     # ── Keyboard ──
 
     def keyPressEvent(self, event: QKeyEvent):
-        if not self._screen_ready:
+        if not self._active:
             return
         key = event.key()
         mods = event.modifiers()
@@ -1256,10 +1231,8 @@ class RegionCaptureOverlay(QWidget):
             self._capture_fullscreen()
             return
 
-        # Crop the original screenshot to the selected region
         result = self._screenshot.copy(sel)
 
-        # Render annotations onto the cropped result
         if self._annotations:
             p = QPainter(result)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1271,10 +1244,16 @@ class RegionCaptureOverlay(QWidget):
         self.capture_completed.emit(result)
 
     def _capture_fullscreen(self):
+        if not self._active:
+            return
+        self.overlay_activated.emit(self)
         self.hide()
         self.capture_completed.emit(self._screenshot.copy())
 
     def _cancel(self):
+        if not self._active:
+            return
+        self.overlay_activated.emit(self)
         self.hide()
         self.capture_cancelled.emit()
 

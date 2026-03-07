@@ -364,6 +364,9 @@ echo "  Uninstall:  bash install.sh --uninstall"
 echo
 echo "  Starting BazzCap now..."
 echo
+pkill -f "python.*bazzcap" 2>/dev/null
+pkill -f "bazzcap/__main__" 2>/dev/null
+sleep 0.5
 nohup "$BIN_DIR/bazzcap" > /dev/null 2>&1 & disown
 echo "  ✓ BazzCap is running in the system tray!"
 
