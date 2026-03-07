@@ -1,8 +1,17 @@
 # BazzCap
 
-A screenshot tool for Linux, built with Python and PyQt6. Designed for Bazzite, Fedora, and other Linux distributions running GNOME or KDE on Wayland (X11 also supported).
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
+[![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41cd52.svg)](https://www.riverbankcomputing.com/software/pyqt/)
+[![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange.svg)]()
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+A free and open-source screenshot tool for Linux, built with Python and PyQt6. Designed for Bazzite, Fedora, and other Linux distributions running GNOME or KDE on Wayland (X11 also supported).
 
 BazzCap lives in the system tray and provides global hotkeys for region capture, fullscreen capture, and window capture -- with annotation tools built directly into the capture overlay.
+
+> **BazzCap is open-source and built for the community.** Contributions, bug reports, and feature requests are welcome from everyone. See [Contributing](#contributing) to get involved.
+
 <img width="752" height="591" alt="image" src="https://github.com/user-attachments/assets/ce59c8a1-b8ad-4c91-97c4-adc391cd294c" />
 
 ---
@@ -268,6 +277,18 @@ BazzCap/
   export PATH="$HOME/.local/bin:$PATH"
   ```
 - Then restart your terminal or run `source ~/.bashrc`.
+
+---
+
+## Contributing
+
+BazzCap is an open-source project and contributions are welcome! Whether it's fixing a bug, adding a feature, improving documentation, or just reporting an issue -- every contribution helps.
+
+- **Bug reports & feature requests**: [Open an issue](https://github.com/lak1z-azk/BazzCap/issues)
+- **Pull requests**: Fork the repo, make your changes, and submit a PR. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+- **Discussions**: Have a question or idea? Start a conversation in [Issues](https://github.com/lak1z-azk/BazzCap/issues).
+
+All skill levels are welcome. If you use BazzCap and want to help make it better, jump in!
 
 ---
 
