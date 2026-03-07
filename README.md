@@ -3,6 +3,7 @@
 A screenshot tool for Linux, built with Python and PyQt6. Designed for Bazzite, Fedora, and other Linux distributions running GNOME or KDE on Wayland (X11 also supported).
 
 BazzCap lives in the system tray and provides global hotkeys for region capture, fullscreen capture, and window capture -- with annotation tools built directly into the capture overlay.
+<img width="752" height="591" alt="image" src="https://github.com/user-attachments/assets/ce59c8a1-b8ad-4c91-97c4-adc391cd294c" />
 
 ---
 
@@ -27,6 +28,9 @@ When capturing a region, an overlay appears across the full screen. You can draw
 - **Highlight** -- Draw translucent highlights over content.
 - **Numbered** -- Place numbered circles (auto-incrementing) with auto-contrast text color.
 
+  <img width="751" height="65" alt="image" src="https://github.com/user-attachments/assets/364cc2e6-b79f-49d4-b0b2-b2f05cdcaba9" />
+
+
 All annotations can be dragged to reposition them after placement. Hover over an annotation and press DEL to remove it. After selecting a region, the annotated screenshot is saved automatically and copied to the clipboard.
 
 ### History Editor
@@ -42,6 +46,9 @@ Global keyboard shortcuts are registered with your desktop environment (GNOME or
 | Window Capture     | Alt+Print      |
 
 Hotkeys are fully customizable from the settings dialog inside BazzCap.
+
+<img width="505" height="369" alt="image" src="https://github.com/user-attachments/assets/08bbeb48-d936-4cf0-9dd6-b4d499b244b3" />
+
 
 ### System Tray
 BazzCap runs in the system tray. Right-click the tray icon to quickly start a capture, open settings, configure hotkeys, or quit. Double-click the tray icon to open the main window. Middle-click to start a region capture instantly. The main window can be minimized to tray on close.
