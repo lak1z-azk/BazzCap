@@ -25,6 +25,21 @@ else:
     SOCKET_DIR = os.path.expanduser("~/.local/share/bazzcap")
 SOCKET_PATH = os.path.join(SOCKET_DIR, "bazzcap.sock")
 
+# macOS virtual key codes (Apple kVK_* constants from Events.h).
+# These are hardware scan codes — stable regardless of modifier state
+# (Shift+1 still sends vk 0x12, not '!').
+if IS_MACOS:
+    _MACOS_VK_MAP = {
+        '0': 0x1D, '1': 0x12, '2': 0x13, '3': 0x14, '4': 0x15,
+        '5': 0x17, '6': 0x16, '7': 0x1A, '8': 0x1C, '9': 0x19,
+        'a': 0x00, 'b': 0x0B, 'c': 0x08, 'd': 0x02, 'e': 0x0E,
+        'f': 0x03, 'g': 0x05, 'h': 0x04, 'i': 0x22, 'j': 0x26,
+        'k': 0x28, 'l': 0x25, 'm': 0x2E, 'n': 0x2D, 'o': 0x1F,
+        'p': 0x23, 'q': 0x0C, 'r': 0x0F, 's': 0x01, 't': 0x11,
+        'u': 0x20, 'v': 0x09, 'w': 0x0D, 'x': 0x07, 'y': 0x10,
+        'z': 0x06,
+    }
+
 
 class HotkeyManager:
     """Register and manage global hotkeys."""
@@ -61,6 +76,9 @@ class HotkeyManager:
                 self._bindings[combo.lower()] = name
         # Re-register desktop shortcuts with new bindings
         self._register_desktop_shortcuts()
+        # Rebuild macOS combo list if using manual listener
+        if IS_MACOS and hasattr(self, '_mac_combos'):
+            self._rebuild_mac_combos()
 
     def start(self):
         """Start listening for hotkeys."""
@@ -74,11 +92,15 @@ class HotkeyManager:
         # 2. Register desktop environment shortcuts
         self._register_desktop_shortcuts()
 
-        # 3. pynput fallback (X11)
+        # 3. pynput (primary on macOS, X11 fallback on Linux)
         try:
             self._start_pynput()
-        except Exception:
-            pass
+        except ImportError as e:
+            print(f"[BazzCap] pynput not available: {e}", flush=True)
+            if IS_MACOS:
+                print("[BazzCap] Install pynput: pip3 install pynput", flush=True)
+        except Exception as e:
+            print(f"[BazzCap] Failed to start hotkey listener: {e}", flush=True)
 
     def stop(self):
         """Stop all hotkey listeners and clean up GNOME keybindings."""
@@ -163,12 +185,17 @@ class HotkeyManager:
                     time.sleep(0.5)
                 continue
 
-    # ── pynput backend (X11 / XWayland) ──────────────────────────────────
+    # ── pynput backend ─────────────────────────────────────────────────
 
     def _start_pynput(self):
-        """Start hotkey listener using pynput (X11/XWayland only)."""
+        """Start hotkey listener using pynput."""
         from pynput import keyboard
 
+        if IS_MACOS:
+            self._start_pynput_macos(keyboard)
+            return
+
+        # Linux X11/XWayland fallback – use GlobalHotKeys
         hotkeys_dict = {}
         for combo, name in self._bindings.items():
             callback = self._listeners.get(name)
@@ -180,6 +207,159 @@ class HotkeyManager:
         if hotkeys_dict:
             self._pynput_listener = keyboard.GlobalHotKeys(hotkeys_dict)
             self._pynput_listener.start()
+
+    # ── macOS pynput (manual Listener + virtual-keycode matching) ────────
+
+    def _start_pynput_macos(self, kb):
+        """Start hotkey listener on macOS using keyboard.Listener.
+
+        pynput's GlobalHotKeys fails on macOS because shifted characters
+        produce different char values (e.g. Shift+1 → '!' not '1'),
+        causing combos like <cmd>+<shift>+1 to never match.  We use a raw
+        Listener with virtual-keycode matching instead.
+        """
+        # Check accessibility permission
+        try:
+            from ApplicationServices import AXIsProcessTrusted
+            if not AXIsProcessTrusted():
+                print(
+                    "[BazzCap] ⚠ Accessibility permission not granted.\n"
+                    "  Global hotkeys require Accessibility access.\n"
+                    "  Go to: System Settings → Privacy & Security "
+                    "→ Accessibility\n"
+                    "  and add this application.",
+                    flush=True,
+                )
+        except ImportError:
+            pass
+
+        self._kb = kb
+        self._mac_combos = []   # [(frozenset, target, is_vk, callback)]
+        self._mac_pressed = set()  # canonical modifier names currently held
+
+        self._rebuild_mac_combos()
+
+        if not self._mac_combos:
+            return
+
+        def on_press(key):
+            mod = self._canonical_mod(key)
+            if mod:
+                self._mac_pressed.add(mod)
+            # Check all registered combos
+            for req_mods, target, is_vk, cb in self._mac_combos:
+                if not req_mods.issubset(self._mac_pressed):
+                    continue
+                if self._mac_key_matches(key, target, is_vk):
+                    try:
+                        cb(cursor_pos=None)
+                    except TypeError:
+                        cb()
+                    break
+
+        def on_release(key):
+            mod = self._canonical_mod(key)
+            if mod:
+                self._mac_pressed.discard(mod)
+
+        self._pynput_listener = kb.Listener(
+            on_press=on_press, on_release=on_release
+        )
+        self._pynput_listener.start()
+
+    def _rebuild_mac_combos(self):
+        """(Re)build the parsed macOS hotkey combo list from _bindings."""
+        self._mac_combos = []
+        for combo, name in self._bindings.items():
+            callback = self._listeners.get(name)
+            if not callback:
+                continue
+            parsed = self._parse_macos_combo(combo)
+            if parsed:
+                mods, target, is_vk = parsed
+                self._mac_combos.append((mods, target, is_vk, callback))
+
+    def _parse_macos_combo(self, combo_str):
+        """Parse '<super><shift>1' → (frozenset({'cmd','shift'}), 0x12, True)."""
+        combo = combo_str.strip().lower()
+
+        mod_map = {
+            '<ctrl>': 'ctrl', '<control>': 'ctrl',
+            '<shift>': 'shift',
+            '<alt>': 'alt',
+            '<super>': 'cmd', '<meta>': 'cmd',
+        }
+
+        mods = set()
+        remaining = combo
+        for mod_str, mod_name in mod_map.items():
+            if mod_str in remaining:
+                mods.add(mod_name)
+                remaining = remaining.replace(mod_str, '')
+        remaining = remaining.strip()
+
+        if not remaining:
+            return None
+
+        # Special named keys — compare as pynput Key enum values
+        kb = self._kb
+        special = {}
+        for attr, names in [
+            ('space', ['space']), ('tab', ['tab']),
+            ('enter', ['enter', 'return']),
+            ('esc', ['escape', 'esc']),
+            ('delete', ['delete']), ('backspace', ['backspace']),
+            ('f1', ['f1']), ('f2', ['f2']), ('f3', ['f3']),
+            ('f4', ['f4']), ('f5', ['f5']), ('f6', ['f6']),
+            ('f7', ['f7']), ('f8', ['f8']), ('f9', ['f9']),
+            ('f10', ['f10']), ('f11', ['f11']), ('f12', ['f12']),
+        ]:
+            key_obj = getattr(kb.Key, attr, None)
+            if key_obj is not None:
+                for n in names:
+                    special[n] = key_obj
+
+        if remaining in special:
+            return (frozenset(mods), special[remaining], False)
+
+        # Single character — use macOS virtual keycode for reliable matching
+        if len(remaining) == 1:
+            vk = _MACOS_VK_MAP.get(remaining)
+            if vk is not None:
+                return (frozenset(mods), vk, True)
+
+        return None
+
+    def _mac_key_matches(self, pressed, target, is_vk):
+        """Check if a pressed key matches the target."""
+        kb = self._kb
+        if is_vk:
+            # Compare by virtual keycode (reliable with any modifier state)
+            if isinstance(pressed, kb.KeyCode) and pressed.vk is not None:
+                return pressed.vk == target
+            return False
+        # Compare Key enum directly (for special keys like Space, F1, etc.)
+        return pressed == target
+
+    def _canonical_mod(self, key):
+        """Map a pressed pynput key to a canonical modifier name, or None."""
+        kb = self._kb
+        if not isinstance(key, kb.Key):
+            return None
+        # Build lookup table on first call
+        if not hasattr(self, '_mod_lookup'):
+            self._mod_lookup = {}
+            for name, attrs in [
+                ('cmd',   ['cmd', 'cmd_l', 'cmd_r']),
+                ('shift', ['shift', 'shift_l', 'shift_r']),
+                ('ctrl',  ['ctrl', 'ctrl_l', 'ctrl_r']),
+                ('alt',   ['alt', 'alt_l', 'alt_r', 'alt_gr']),
+            ]:
+                for a in attrs:
+                    k = getattr(kb.Key, a, None)
+                    if k is not None:
+                        self._mod_lookup[k] = name
+        return self._mod_lookup.get(key)
 
     @staticmethod
     def _to_pynput_combo(combo: str) -> str | None:
