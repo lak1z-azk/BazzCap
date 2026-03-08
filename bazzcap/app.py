@@ -30,41 +30,6 @@ from bazzcap.hotkeys import HotkeyManager
 from bazzcap.hotkey_settings import HotkeySettingsDialog
 
 
-class _ScreenDetector(QWidget):
-    """Invisible fullscreen overlay that detects cursor presence via pointer events.
-
-    On Wayland, apps cannot query cursor position.  By showing a nearly-
-    invisible fullscreen window on each screen, the compositor sends a
-    pointer-enter event to the one under the cursor — revealing which
-    screen the cursor is on.  No GNOME Shell extension needed.
-    """
-
-    screen_detected = pyqtSignal(object)  # emits the QScreen
-
-    def __init__(self, screen):
-        super().__init__()
-        self._screen = screen
-        self._fired = False
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # Nearly invisible (alpha ≈ 1/255) so compositor still delivers events
-        self.setWindowOpacity(0.01)
-
-    def enterEvent(self, event):
-        if not self._fired:
-            self._fired = True
-            self.screen_detected.emit(self._screen)
-
-    def mouseMoveEvent(self, event):
-        if not self._fired:
-            self._fired = True
-            self.screen_detected.emit(self._screen)
-
-
 class SettingsDialog(QDialog):
 
     def __init__(self, config: Config, parent=None):
@@ -400,57 +365,6 @@ class MainWindow(QMainWindow):
         else:
             QTimer.singleShot(250, lambda: self._do_overlay_capture(mode))
 
-    # ── Cursor screen detection (pure app, no extension) ────────────
-
-    def _detect_cursor_screen(self, callback):
-        """Detect which screen the cursor is on, then call *callback(screen)*.
-
-        Creates a nearly-invisible fullscreen overlay on every screen.
-        The compositor delivers a pointer-enter event to the one under
-        the cursor.  Works on any Wayland compositor — no GNOME Shell
-        extension required.
-        """
-        screens = QGuiApplication.screens()
-        if len(screens) == 1:
-            callback(screens[0])
-            return
-
-        self._screen_detect_cb = callback
-        self._screen_detectors = []
-
-        for scr in screens:
-            det = _ScreenDetector(scr)
-            det.screen_detected.connect(self._on_screen_detected)
-            self._screen_detectors.append(det)
-
-        # Place each detector on its screen (same trick as region overlay)
-        for det in self._screen_detectors:
-            det.winId()
-            det.windowHandle().setScreen(det._screen)
-            det.showFullScreen()
-
-        # Safety timeout: if no pointer-enter after 3 s, use primary
-        self._detect_timeout = QTimer()
-        self._detect_timeout.setSingleShot(True)
-        self._detect_timeout.timeout.connect(
-            lambda: self._on_screen_detected(QGuiApplication.primaryScreen())
-        )
-        self._detect_timeout.start(3000)
-
-    def _on_screen_detected(self, screen):
-        """Called when a _ScreenDetector receives a pointer-enter event."""
-        if hasattr(self, '_detect_timeout'):
-            self._detect_timeout.stop()
-        for det in getattr(self, '_screen_detectors', []):
-            det.close()
-            det.deleteLater()
-        self._screen_detectors = []
-
-        cb = getattr(self, '_screen_detect_cb', None)
-        self._screen_detect_cb = None
-        if cb:
-            cb(screen)
-
     @staticmethod
     def _mute_event_sounds():
         """Temporarily disable GNOME event sounds. Returns previous value."""
@@ -494,10 +408,14 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(500, lambda: self._restore_event_sounds(was_on))
 
     def _do_fullscreen_capture(self):
-        """Capture the screen the mouse is on — no overlay, instant save."""
-        self._status.showMessage("Grabbing screen...")
+        """Capture the full screen the mouse is on.
 
-        # Step 1: screenshot first (clean desktop, no detection overlay)
+        Uses the same multi-overlay approach as region capture:
+        overlays appear on all screens, and the first one clicked
+        instantly captures that screen's full area.
+        """
+        self._status.showMessage("Click a screen to capture...")
+
         screenshot = self._grab_screenshot_silent()
         if screenshot is None or screenshot.isNull():
             self._status.showMessage("Failed to grab screen!")
@@ -505,22 +423,29 @@ class MainWindow(QMainWindow):
             self._notify("Capture failed", "Could not grab screen")
             return
 
-        self._pending_fullscreen = screenshot
+        self._overlays = []
+        screens = QGuiApplication.screens()
 
-        # Step 2: detect cursor screen (overlay appears briefly AFTER the
-        #         screenshot is already taken, so image is clean)
-        self._detect_cursor_screen(self._finish_fullscreen_capture)
-
-    def _finish_fullscreen_capture(self, target_screen):
-        """Crop pending screenshot to the detected screen and save."""
-        screenshot = getattr(self, '_pending_fullscreen', None)
-        self._pending_fullscreen = None
-        if screenshot is None or screenshot.isNull():
+        if len(screens) == 1:
+            # Single monitor — just save the whole thing
+            self._save_and_notify(screenshot, "fullscreen")
             return
 
-        geo = target_screen.geometry()
-        result = screenshot.copy(geo.x(), geo.y(), geo.width(), geo.height())
-        self._save_and_notify(result, "fullscreen")
+        for scr in screens:
+            ov = RegionCaptureOverlay(
+                screenshot, RegionCaptureOverlay.MODE_FULLSCREEN, screen=scr
+            )
+            ov.capture_completed.connect(self._on_overlay_captured)
+            ov.capture_cancelled.connect(self._on_overlay_cancelled)
+            ov.overlay_activated.connect(self._on_overlay_activated)
+            self._overlays.append(ov)
+
+        for ov in self._overlays:
+            ov.winId()
+            ov.windowHandle().setScreen(ov._target_screen)
+            ov.showFullScreen()
+
+        self._overlay = None
 
     def _do_window_capture(self):
         """Capture the focused window — no overlay."""

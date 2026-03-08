@@ -901,6 +901,12 @@ class RegionCaptureOverlay(QWidget):
             return
         if event.button() == Qt.MouseButton.LeftButton:
             self.overlay_activated.emit(self)
+
+            # Fullscreen mode on multi-monitor: capture this screen immediately
+            if self._mode == self.MODE_FULLSCREEN:
+                self._capture_fullscreen()
+                return
+
             pos = event.pos()
 
             # Check if clicking on an existing annotation to drag it
