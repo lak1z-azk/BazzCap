@@ -14,7 +14,10 @@ import socket
 import subprocess
 import sys
 
-SOCKET_PATH = os.path.expanduser("~/.local/share/bazzcap/bazzcap.sock")
+if sys.platform == "darwin":
+    SOCKET_PATH = os.path.expanduser("~/Library/Application Support/bazzcap/bazzcap.sock")
+else:
+    SOCKET_PATH = os.path.expanduser("~/.local/share/bazzcap/bazzcap.sock")
 
 
 def main():
@@ -24,16 +27,18 @@ def main():
     command = sys.argv[1]
 
     x, y = 0, 0
-    try:
-        r = subprocess.run(
-            ["xdotool", "getmouselocation"],
-            capture_output=True, text=True, timeout=3,
-        )
-        m = re.search(r"x:(\d+) y:(\d+)", r.stdout or "")
-        if m:
-            x, y = int(m.group(1)), int(m.group(2))
-    except (subprocess.SubprocessError, OSError, FileNotFoundError):
-        pass
+    if sys.platform != "darwin":
+        # xdotool is Linux-only
+        try:
+            r = subprocess.run(
+                ["xdotool", "getmouselocation"],
+                capture_output=True, text=True, timeout=3,
+            )
+            m = re.search(r"x:(\d+) y:(\d+)", r.stdout or "")
+            if m:
+                x, y = int(m.group(1)), int(m.group(2))
+        except (subprocess.SubprocessError, OSError, FileNotFoundError):
+            pass
 
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

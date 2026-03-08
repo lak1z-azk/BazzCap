@@ -1,10 +1,14 @@
 
 import json
 import os
+import sys
 from datetime import datetime
 from dataclasses import dataclass ,asdict ,field
 
-HISTORY_FILE =os .path .expanduser ("~/.config/bazzcap/history.json")
+if sys.platform == "darwin":
+    HISTORY_FILE = os.path.expanduser("~/Library/Application Support/bazzcap/history.json")
+else:
+    HISTORY_FILE = os.path.expanduser("~/.config/bazzcap/history.json")
 
 @dataclass
 class HistoryEntry :

@@ -1278,11 +1278,41 @@ def _is_flatpak() -> bool:
 
 
 def grab_screenshot_via_portal() -> QPixmap | None:
-    """Take a fullscreen screenshot via XDG Desktop Portal.
+    """Take a fullscreen screenshot.
 
+    On macOS, uses screencapture. On Linux, tries XDG Desktop Portal first,
+    then CLI tools, then QScreen.grabWindow as fallback.
     Handles Flatpak sandboxes by using flatpak-spawn --host.
     Returns a QPixmap of the entire screen, or None on failure.
     """
+    import sys as _sys
+    if _sys.platform == "darwin":
+        # macOS: use screencapture
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        try:
+            subprocess.run(
+                ["screencapture", "-x", tmp.name],
+                capture_output=True, timeout=10, check=True,
+            )
+            pixmap = QPixmap(tmp.name)
+            if not pixmap.isNull():
+                return pixmap
+        except (subprocess.SubprocessError, OSError):
+            pass
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+        # Fallback: QScreen grab
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            pixmap = screen.grabWindow(0)
+            if not pixmap.isNull():
+                return pixmap
+        return None
+
     helper = os.path.join(os.path.dirname(__file__), "_portal_helper.py")
     in_flatpak = _is_flatpak()
 

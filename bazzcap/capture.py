@@ -2,10 +2,13 @@
 import subprocess
 import shutil
 import os
+import sys
 import tempfile
 import time
 from enum import Enum ,auto
 from pathlib import Path
+
+IS_MACOS = sys.platform == "darwin"
 
 class CaptureMode (Enum ):
     FULLSCREEN =auto ()
@@ -59,6 +62,11 @@ def _portal_screenshot (interactive :bool =True )->str |None :
     return None
 
 def capture_fullscreen (output_path :str )->bool :
+    if IS_MACOS:
+        # -x suppresses shutter sound
+        ok, _ = _run(["screencapture", "-x", output_path])
+        return ok and os.path.isfile(output_path)
+
     portal_path =_portal_screenshot (interactive =False )
     if portal_path :
         try :
@@ -100,6 +108,11 @@ def capture_fullscreen (output_path :str )->bool :
     return False
 
 def capture_region (output_path :str )->bool :
+    if IS_MACOS:
+        # -i interactive region, -x no sound
+        ok, _ = _run(["screencapture", "-i", "-x", output_path])
+        return ok and os.path.isfile(output_path)
+
     portal_path =_portal_screenshot (interactive =True )
     if portal_path :
         try :
@@ -152,6 +165,11 @@ def capture_region (output_path :str )->bool :
     return False
 
 def capture_window (output_path :str )->bool :
+    if IS_MACOS:
+        # -w interactive window selection, -x no sound
+        ok, _ = _run(["screencapture", "-w", "-x", output_path])
+        return ok and os.path.isfile(output_path)
+
     portal_path =_portal_screenshot (interactive =True )
     if portal_path :
         try :
@@ -202,6 +220,9 @@ def capture (mode :CaptureMode ,output_path :str )->bool :
 
 def detect_available_backends ()->list [str ]:
     backends =[]
+    if IS_MACOS:
+        backends.append("screencapture (macOS)")
+        return backends
     if _has ("gdbus"):
         backends .append ("XDG Portal (gdbus)")
     if _has ("spectacle"):

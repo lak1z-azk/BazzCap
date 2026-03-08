@@ -4,9 +4,10 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41cd52.svg)](https://www.riverbankcomputing.com/software/pyqt/)
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange.svg)]()
+[![Platform: macOS](https://img.shields.io/badge/Platform-macOS-lightgrey.svg)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A free and open-source screenshot tool for Linux, built with Python and PyQt6. Designed for Bazzite, Fedora, and other Linux distributions running GNOME or KDE on Wayland (X11 also supported).
+A free and open-source screenshot tool for **Linux** and **macOS**, built with Python and PyQt6. Designed for Bazzite, Fedora, and other Linux distributions running GNOME or KDE on Wayland (X11 also supported). Also works on macOS 11+ (Big Sur and later).
 
 BazzCap lives in the system tray and provides global hotkeys for region capture, fullscreen capture, and window capture -- with annotation tools built directly into the capture overlay.
 
@@ -45,7 +46,9 @@ All annotations can be dragged to reposition them after placement. Hover over an
 Double-clicking a capture in the history list opens a full image editor where you can draw additional annotations (rectangle, ellipse, line, arrow, freehand, text, blur, highlight, numbered steps), crop the image, copy to clipboard, or save to a new file.
 
 ### Hotkeys
-Global keyboard shortcuts are registered with your desktop environment (GNOME or KDE) so they work even when BazzCap is not focused.
+Global keyboard shortcuts are registered with your desktop environment (GNOME or KDE on Linux, pynput on macOS) so they work even when BazzCap is not focused.
+
+**Linux defaults:**
 
 | Action             | Default Hotkey |
 |--------------------|----------------|
@@ -53,29 +56,44 @@ Global keyboard shortcuts are registered with your desktop environment (GNOME or
 | Region Capture     | Ctrl+Print     |
 | Window Capture     | Alt+Print      |
 
+**macOS defaults:**
+
+| Action             | Default Hotkey   |
+|--------------------|------------------|
+| Fullscreen Capture | Cmd+Shift+3      |
+| Region Capture     | Cmd+Shift+4      |
+| Window Capture     | Cmd+Shift+5      |
+
 Hotkeys are fully customizable from the settings dialog inside BazzCap.
 
 ### System Tray
 BazzCap runs in the system tray. Right-click the tray icon to quickly start a capture, open settings, configure hotkeys, or quit. Double-click the tray icon to open the main window. Middle-click to start a region capture instantly. The main window can be minimized to tray on close.
 
 ### Desktop Integration
-- **GNOME**: Hotkeys are registered as custom keybindings via gsettings.
-- **KDE Plasma**: Hotkeys are registered via .desktop shortcut files and kglobalaccel D-Bus.
-- **Autostart**: Optional autostart on login via XDG autostart.
-- **Clipboard**: Captures are automatically copied to the clipboard using wl-copy (Wayland), xclip, or Qt clipboard as fallback.
-- **Notifications**: Desktop notifications on capture completion via notify-send.
+- **GNOME** (Linux): Hotkeys are registered as custom keybindings via gsettings.
+- **KDE Plasma** (Linux): Hotkeys are registered via .desktop shortcut files and kglobalaccel D-Bus.
+- **macOS**: Hotkeys use pynput (requires Accessibility permission). Autostart via LaunchAgent.
+- **Autostart**: Optional autostart on login via XDG autostart (Linux) or LaunchAgent (macOS).
+- **Clipboard**: Captures are automatically copied to the clipboard using wl-copy (Wayland), xclip (X11), osascript/pbcopy (macOS), or Qt clipboard as fallback.
+- **Notifications**: Desktop notifications on capture completion via notify-send (Linux) or osascript (macOS).
 
 ---
 
 ## Requirements
 
 ### System
-- Linux (tested on Bazzite / Fedora, should work on any distribution)
-- Python 3.10 or newer
-- GNOME or KDE Plasma desktop environment (for global hotkeys)
-- Wayland or X11 display server
+- **Linux** (tested on Bazzite / Fedora, should work on any distribution)
+  - Python 3.10 or newer
+  - GNOME or KDE Plasma desktop environment (for global hotkeys)
+  - Wayland or X11 display server
+- **macOS** 11+ (Big Sur or later)
+  - Python 3.10 or newer (from python.org or Homebrew)
+  - Screen Recording permission (for screenshots)
+  - Accessibility permission (for global hotkeys)
 
 ### Required System Packages
+
+#### Linux
 The installer will **automatically install** all of these using your system package manager (dnf, apt, pacman, zypper, or rpm-ostree). You will be prompted for your sudo password during installation.
 
 If you prefer to install them manually beforehand:
@@ -107,6 +125,15 @@ sudo pacman -S python xdotool wl-clipboard grim libnotify
 | spectacle      | Screenshot backend (KDE)         |
 | libnotify      | Desktop notifications            |
 
+#### macOS
+macOS ships with all required system tools built-in (`screencapture`, `pbcopy`, `osascript`). You only need Python 3:
+
+```
+brew install python3
+```
+
+Or download from [python.org](https://www.python.org/downloads/).
+
 ### Python Dependencies
 These are installed automatically inside a virtual environment by the installer:
 - PyQt6 >= 6.5.0
@@ -116,7 +143,7 @@ These are installed automatically inside a virtual environment by the installer:
 
 ## Installation
 
-### Quick Install (Recommended)
+### Linux — Quick Install (Recommended)
 
 Everything is handled by the installer. Just clone and run:
 
@@ -138,8 +165,29 @@ The installer will:
 9. Add `~/.local/bin` to your PATH if needed.
 10. Launch BazzCap in the system tray.
 
+### macOS — Quick Install
+
+```
+git clone https://github.com/lak1z-azk/BazzCap.git
+cd BazzCap
+bash install_macos.sh
+```
+
+The installer will:
+1. Check for Python 3 (installs via Homebrew if available).
+2. Copy BazzCap files to `~/Library/Application Support/bazzcap/`.
+3. Create a Python virtual environment and install PyQt6 and Pillow.
+4. Create a launcher at `/usr/local/bin/bazzcap`.
+5. Create a macOS `.app` bundle at `~/Applications/BazzCap.app` (works with Spotlight/Dock).
+6. Set up a LaunchAgent for autostart on login.
+7. Launch BazzCap in the menu bar.
+
+> **Note:** macOS will ask for **Screen Recording** and **Accessibility** permissions on first use.
+> Grant these in **System Settings → Privacy & Security**.
+
 After installation, you can launch BazzCap by:
-- Searching for "BazzCap" in your application menu.
+- Searching for "BazzCap" in Spotlight.
+- Opening `~/Applications/BazzCap.app`.
 - Running `bazzcap` in a terminal.
 
 ### Immutable Distributions (Bazzite, Silverblue, Kinoite)
@@ -180,11 +228,17 @@ If you prefer not to use the installer, follow these steps:
 
 ### Uninstall
 
+**Linux:**
 ```
 bash install.sh --uninstall
 ```
 
-This removes all installed files, desktop entries, autostart configuration, and any registered hotkeys (GNOME and KDE). Configuration files at `~/.config/bazzcap/` are preserved in case you reinstall.
+**macOS:**
+```
+bash install_macos.sh --uninstall
+```
+
+This removes all installed files, desktop entries, autostart configuration, and any registered hotkeys (GNOME and KDE). Configuration files at `~/.config/bazzcap/` (Linux) or `~/Library/Application Support/bazzcap/` (macOS) are preserved in case you reinstall.
 
 ---
 
@@ -208,7 +262,7 @@ After installation, BazzCap starts in the system tray. If the tray icon does not
 4. Changes are applied immediately and registered with your desktop environment.
 
 ### Start With System
-BazzCap is configured to start automatically on login by default. You can toggle this in Settings by checking or unchecking "Start with system (autostart on login)". This creates or removes an XDG autostart entry at `~/.config/autostart/bazzcap.desktop`.
+BazzCap is configured to start automatically on login by default. You can toggle this in Settings by checking or unchecking "Start with system (autostart on login)". On Linux, this creates or removes an XDG autostart entry at `~/.config/autostart/bazzcap.desktop`. On macOS, this creates or removes a LaunchAgent at `~/Library/LaunchAgents/com.bazzcap.plist`.
 
 ### Changing Save Location
 By default, captures are saved to `~/Pictures/BazzCap/`. This can be changed in the settings dialog.
@@ -217,7 +271,7 @@ By default, captures are saved to `~/Pictures/BazzCap/`. This can be changed in 
 The main BazzCap window provides quick-access buttons for all capture modes, a history list of recent captures, and buttons to open Settings or Hotkey configuration. Double-click any image in the history list to open it in the annotation editor.
 
 ### Configuration
-All settings are stored in `~/.config/bazzcap/config.json`. You can also change settings through the Settings dialog in the app. Available settings:
+All settings are stored in `~/.config/bazzcap/config.json` (Linux) or `~/Library/Application Support/bazzcap/config.json` (macOS). You can also change settings through the Settings dialog in the app. Available settings:
 - Save directory and filename pattern
 - Image format (PNG, JPEG, BMP, WebP)
 - Auto-copy to clipboard after capture
@@ -248,7 +302,8 @@ BazzCap/
     resources/
       bazzcap.svg           Application icon
   bazzcap.py                Launcher script
-  install.sh                Installer and uninstaller
+  install.sh                Installer and uninstaller (Linux)
+  install_macos.sh          Installer and uninstaller (macOS)
   requirements.txt          Python dependencies
 ```
 
@@ -258,25 +313,33 @@ BazzCap/
 
 ### BazzCap does not start
 - Verify Python 3.10+ is installed: `python3 --version`
-- Check if the virtual environment exists: `ls ~/.local/share/bazzcap/venv/`
-- Try reinstalling: `bash install.sh`
+- **Linux:** Check if the virtual environment exists: `ls ~/.local/share/bazzcap/venv/`
+- **macOS:** Check if the virtual environment exists: `ls ~/Library/Application\ Support/bazzcap/venv/`
+- Try reinstalling: `bash install.sh` (Linux) or `bash install_macos.sh` (macOS)
 
 ### Hotkeys do not work
-- Make sure BazzCap is running (check the system tray).
-- On GNOME, check that keybindings are registered: `gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings`
-- On KDE, check System Settings > Shortcuts for BazzCap entries.
+- Make sure BazzCap is running (check the system tray / menu bar).
+- **GNOME:** Check that keybindings are registered: `gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings`
+- **KDE:** Check System Settings > Shortcuts for BazzCap entries.
+- **macOS:** Ensure Accessibility permission is granted in System Settings → Privacy & Security → Accessibility. BazzCap must be listed and checked.
 - Some distributions override the Print key. You may need to unbind the default screenshot tool in your system settings first.
 
 ### Clipboard does not work
-- Install wl-clipboard: `sudo dnf install wl-clipboard`
-- On X11, install xclip: `sudo dnf install xclip`
+- **Linux (Wayland):** Install wl-clipboard: `sudo dnf install wl-clipboard`
+- **Linux (X11):** Install xclip: `sudo dnf install xclip`
+- **macOS:** Clipboard uses the built-in pbcopy/osascript — should work out of the box.
+
+### Screenshots are blank or fail (macOS)
+- Grant **Screen Recording** permission in System Settings → Privacy & Security → Screen Recording. BazzCap (or Terminal / the Python binary) must be listed and checked.
+- You may need to restart BazzCap after granting permissions.
 
 ### "bazzcap: command not found"
-- Add `~/.local/bin` to your PATH. Add this line to `~/.bashrc`:
+- **Linux:** Add `~/.local/bin` to your PATH. Add this line to `~/.bashrc`:
   ```
   export PATH="$HOME/.local/bin:$PATH"
   ```
-- Then restart your terminal or run `source ~/.bashrc`.
+  Then restart your terminal or run `source ~/.bashrc`.
+- **macOS:** The installer places the launcher at `/usr/local/bin/bazzcap`. If using `~/bin` instead, add it to your PATH in `~/.zshrc`.
 
 ---
 

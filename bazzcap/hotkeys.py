@@ -16,8 +16,13 @@ import threading
 import shutil
 import time
 
+IS_MACOS = sys.platform == "darwin"
+
 # Socket path in user's home dir — shared between Flatpak and host
-SOCKET_DIR = os.path.expanduser("~/.local/share/bazzcap")
+if IS_MACOS:
+    SOCKET_DIR = os.path.expanduser("~/Library/Application Support/bazzcap")
+else:
+    SOCKET_DIR = os.path.expanduser("~/.local/share/bazzcap")
 SOCKET_PATH = os.path.join(SOCKET_DIR, "bazzcap.sock")
 
 
@@ -243,6 +248,8 @@ class HotkeyManager:
 
     def _unregister_desktop_shortcuts(self):
         """Remove BazzCap shortcuts from the desktop environment."""
+        if IS_MACOS:
+            return  # macOS uses pynput only, no DE shortcuts
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
         if "gnome" in desktop:
             self._unregister_gnome_shortcuts()
@@ -301,6 +308,8 @@ class HotkeyManager:
 
     def _register_desktop_shortcuts(self):
         """Register shortcuts with GNOME or KDE."""
+        if IS_MACOS:
+            return  # macOS uses pynput only
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
         if "gnome" in desktop:
             self._register_gnome_shortcuts()

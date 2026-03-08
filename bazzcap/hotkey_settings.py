@@ -6,6 +6,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent
 from PyQt6.QtGui import QKeyEvent, QKeySequence
+import sys
+
+IS_MACOS = sys.platform == "darwin"
 
 
 class HotkeyEdit(QLineEdit):
@@ -197,7 +200,10 @@ class HotkeyEdit(QLineEdit):
         display = display.replace("<Ctrl>", "Ctrl + ")
         display = display.replace("<Shift>", "Shift + ")
         display = display.replace("<Alt>", "Alt + ")
-        display = display.replace("<Super>", "Super + ")
+        if IS_MACOS:
+            display = display.replace("<Super>", "Cmd + ")
+        else:
+            display = display.replace("<Super>", "Super + ")
         parts = display.strip(" +").split(" + ")
         if parts:
             parts[-1] = parts[-1].upper() if len(parts[-1]) == 1 else parts[-1].title()
@@ -262,11 +268,24 @@ class HotkeySettingsDialog(QDialog):
         self.accept()
 
     def _reset_defaults(self):
-        self._hk_fullscreen._hotkey = "Print"
-        self._hk_fullscreen.setText(HotkeyEdit._format_display("Print"))
+        if IS_MACOS:
+            defaults = {
+                "fullscreen": "<Super><Shift>3",
+                "region": "<Super><Shift>4",
+                "window": "<Super><Shift>5",
+            }
+        else:
+            defaults = {
+                "fullscreen": "Print",
+                "region": "<Ctrl>Print",
+                "window": "<Alt>Print",
+            }
 
-        self._hk_region._hotkey = "<Ctrl>Print"
-        self._hk_region.setText(HotkeyEdit._format_display("<Ctrl>Print"))
+        self._hk_fullscreen._hotkey = defaults["fullscreen"]
+        self._hk_fullscreen.setText(HotkeyEdit._format_display(defaults["fullscreen"]))
 
-        self._hk_window._hotkey = "<Alt>Print"
-        self._hk_window.setText(HotkeyEdit._format_display("<Alt>Print"))
+        self._hk_region._hotkey = defaults["region"]
+        self._hk_region.setText(HotkeyEdit._format_display(defaults["region"]))
+
+        self._hk_window._hotkey = defaults["window"]
+        self._hk_window.setText(HotkeyEdit._format_display(defaults["window"]))

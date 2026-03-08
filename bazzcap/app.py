@@ -4,6 +4,8 @@ import os
 import subprocess
 from functools import partial
 
+IS_MACOS = sys.platform == "darwin"
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QSystemTrayIcon, QMenu,
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -190,9 +192,14 @@ class SettingsDialog(QDialog):
         self._config.save()
         self.accept()
 
-    _AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
-    _AUTOSTART_FILE = os.path.join(_AUTOSTART_DIR, "bazzcap.desktop")
-    _BIN_PATH = os.path.expanduser("~/.local/bin/bazzcap")
+    if IS_MACOS:
+        _AUTOSTART_DIR = os.path.expanduser("~/Library/LaunchAgents")
+        _AUTOSTART_FILE = os.path.join(_AUTOSTART_DIR, "com.bazzcap.plist")
+        _BIN_PATH = "/usr/local/bin/bazzcap"
+    else:
+        _AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
+        _AUTOSTART_FILE = os.path.join(_AUTOSTART_DIR, "bazzcap.desktop")
+        _BIN_PATH = os.path.expanduser("~/.local/bin/bazzcap")
 
     def _is_autostart_enabled(self) -> bool:
         return os.path.isfile(self._AUTOSTART_FILE)
@@ -200,20 +207,36 @@ class SettingsDialog(QDialog):
     def _set_autostart(self, enabled: bool):
         if enabled:
             os.makedirs(self._AUTOSTART_DIR, exist_ok=True)
-            entry = (
-                "[Desktop Entry]\n"
-                "Name=BazzCap\n"
-                "Comment=Screenshot Tool\n"
-                f"Exec={self._BIN_PATH}\n"
-                "Icon=bazzcap\n"
-                "Terminal=false\n"
-                "Type=Application\n"
-                "X-GNOME-Autostart-enabled=true\n"
-                "Hidden=false\n"
-            )
-            with open(self._AUTOSTART_FILE, "w") as f:
-                f.write(entry)
-            os.chmod(self._AUTOSTART_FILE, 0o755)
+            if IS_MACOS:
+                plist = (
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
+                    ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                    '<plist version="1.0">\n<dict>\n'
+                    '  <key>Label</key>\n  <string>com.bazzcap</string>\n'
+                    '  <key>ProgramArguments</key>\n  <array>\n'
+                    f'    <string>{self._BIN_PATH}</string>\n'
+                    '  </array>\n'
+                    '  <key>RunAtLoad</key>\n  <true/>\n'
+                    '</dict>\n</plist>\n'
+                )
+                with open(self._AUTOSTART_FILE, "w") as f:
+                    f.write(plist)
+            else:
+                entry = (
+                    "[Desktop Entry]\n"
+                    "Name=BazzCap\n"
+                    "Comment=Screenshot Tool\n"
+                    f"Exec={self._BIN_PATH}\n"
+                    "Icon=bazzcap\n"
+                    "Terminal=false\n"
+                    "Type=Application\n"
+                    "X-GNOME-Autostart-enabled=true\n"
+                    "Hidden=false\n"
+                )
+                with open(self._AUTOSTART_FILE, "w") as f:
+                    f.write(entry)
+                os.chmod(self._AUTOSTART_FILE, 0o755)
         else:
             if os.path.isfile(self._AUTOSTART_FILE):
                 os.remove(self._AUTOSTART_FILE)
@@ -313,7 +336,7 @@ class MainWindow(QMainWindow):
         header.setStyleSheet("color: #89b4fa;")
         title_layout.addWidget(header)
 
-        subtitle = QLabel("Screenshot Tool for Linux")
+        subtitle = QLabel("Screenshot Tool for Linux" if not IS_MACOS else "Screenshot Tool for macOS")
         subtitle.setStyleSheet("color: #6c7086; font-size: 12px;")
         title_layout.addWidget(subtitle)
 
@@ -423,6 +446,8 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _mute_event_sounds():
         """Temporarily disable GNOME event sounds. Returns previous value."""
+        if IS_MACOS:
+            return None  # macOS screencapture -x is already silent
         import subprocess
         try:
             r = subprocess.run(
@@ -443,6 +468,8 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _restore_event_sounds(was_on):
         """Restore GNOME event sounds to previous state."""
+        if IS_MACOS:
+            return
         import subprocess
         if was_on:
             try:
@@ -537,17 +564,22 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _get_cursor_pos():
-        import subprocess, re
-        try:
-            r = subprocess.run(
-                ["xdotool", "getmouselocation"],
-                capture_output=True, text=True, timeout=3,
-            )
-            m = re.search(r"x:(\d+) y:(\d+)", r.stdout or "")
-            if m:
-                return (int(m.group(1)), int(m.group(2)))
-        except (subprocess.SubprocessError, OSError, FileNotFoundError):
-            pass
+        from PyQt6.QtGui import QCursor
+        pos = QCursor.pos()
+        if not pos.isNull():
+            return (pos.x(), pos.y())
+        if not IS_MACOS:
+            import subprocess, re
+            try:
+                r = subprocess.run(
+                    ["xdotool", "getmouselocation"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                m = re.search(r"x:(\d+) y:(\d+)", r.stdout or "")
+                if m:
+                    return (int(m.group(1)), int(m.group(2)))
+            except (subprocess.SubprocessError, OSError, FileNotFoundError):
+                pass
         return None
 
     def _do_overlay_capture(self, mode: str):
@@ -672,11 +704,13 @@ class MainWindow(QMainWindow):
         if ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
             self._open_editor(path)
         else:
-            subprocess.Popen(["xdg-open", path],
+            opener = "open" if IS_MACOS else "xdg-open"
+            subprocess.Popen([opener, path],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _open_save_dir(self):
-        subprocess.Popen(["xdg-open", self._config.save_directory],
+        opener = "open" if IS_MACOS else "xdg-open"
+        subprocess.Popen([opener, self._config.save_directory],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _clear_history(self):
@@ -697,11 +731,18 @@ class MainWindow(QMainWindow):
 
     def _notify(self, title: str, message: str):
         try:
-            subprocess.Popen(
-                ["notify-send", "-a", "BazzCap", "-i", "camera-photo",
-                 title, message],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            if IS_MACOS:
+                subprocess.Popen(
+                    ["osascript", "-e",
+                     f'display notification "{message}" with title "{title}"'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            else:
+                subprocess.Popen(
+                    ["notify-send", "-a", "BazzCap", "-i", "camera-photo",
+                     title, message],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
         except (OSError, FileNotFoundError):
             pass
 
