@@ -11,9 +11,9 @@ IS_MACOS = sys.platform == "darwin"
 # --- Platform-specific defaults ---
 if IS_MACOS:
     _DEFAULT_HOTKEYS = {
-        "capture_fullscreen": "<Super><Shift>3",
-        "capture_region": "<Super><Shift>4",
-        "capture_window": "<Super><Shift>5",
+        "capture_fullscreen": "<Super><Shift>1",
+        "capture_region": "<Super><Shift>2",
+        "capture_window": "<Super><Shift>6",
     }
     _CONFIG_DIR = os.path.expanduser("~/Library/Application Support/bazzcap")
 else:

@@ -105,15 +105,28 @@ class HotkeyEdit(QLineEdit):
                 self.setText(preview + " + ...")
             return
 
+        # On macOS, Qt swaps Cmd and Ctrl:
+        #   Cmd key  → ControlModifier  (we want to store as <Super>)
+        #   Ctrl key → MetaModifier     (we want to store as <Ctrl>)
         parts = []
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
-            parts.append("<Ctrl>")
-        if modifiers & Qt.KeyboardModifier.ShiftModifier:
-            parts.append("<Shift>")
-        if modifiers & Qt.KeyboardModifier.AltModifier:
-            parts.append("<Alt>")
-        if modifiers & Qt.KeyboardModifier.MetaModifier:
-            parts.append("<Super>")
+        if IS_MACOS:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                parts.append("<Super>")   # Cmd key
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                parts.append("<Shift>")
+            if modifiers & Qt.KeyboardModifier.AltModifier:
+                parts.append("<Alt>")
+            if modifiers & Qt.KeyboardModifier.MetaModifier:
+                parts.append("<Ctrl>")    # Ctrl key
+        else:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                parts.append("<Ctrl>")
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                parts.append("<Shift>")
+            if modifiers & Qt.KeyboardModifier.AltModifier:
+                parts.append("<Alt>")
+            if modifiers & Qt.KeyboardModifier.MetaModifier:
+                parts.append("<Super>")
 
         key_name = self._key_to_name(key)
         if not key_name:
@@ -133,15 +146,26 @@ class HotkeyEdit(QLineEdit):
 
     @staticmethod
     def _modifiers_to_display(modifiers) -> str:
+        # On macOS Qt swaps Cmd/Ctrl: ControlModifier=Cmd, MetaModifier=Ctrl
         parts = []
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
-            parts.append("Ctrl")
-        if modifiers & Qt.KeyboardModifier.ShiftModifier:
-            parts.append("Shift")
-        if modifiers & Qt.KeyboardModifier.AltModifier:
-            parts.append("Alt")
-        if modifiers & Qt.KeyboardModifier.MetaModifier:
-            parts.append("Super")
+        if IS_MACOS:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                parts.append("Cmd")
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                parts.append("Shift")
+            if modifiers & Qt.KeyboardModifier.AltModifier:
+                parts.append("Alt")
+            if modifiers & Qt.KeyboardModifier.MetaModifier:
+                parts.append("Ctrl")
+        else:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                parts.append("Ctrl")
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                parts.append("Shift")
+            if modifiers & Qt.KeyboardModifier.AltModifier:
+                parts.append("Alt")
+            if modifiers & Qt.KeyboardModifier.MetaModifier:
+                parts.append("Super")
         return " + ".join(parts)
 
     @staticmethod
@@ -270,9 +294,9 @@ class HotkeySettingsDialog(QDialog):
     def _reset_defaults(self):
         if IS_MACOS:
             defaults = {
-                "fullscreen": "<Super><Shift>3",
-                "region": "<Super><Shift>4",
-                "window": "<Super><Shift>5",
+                "fullscreen": "<Super><Shift>1",
+                "region": "<Super><Shift>2",
+                "window": "<Super><Shift>6",
             }
         else:
             defaults = {

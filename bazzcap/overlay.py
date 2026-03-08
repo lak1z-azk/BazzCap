@@ -1297,6 +1297,20 @@ def grab_screenshot_via_portal() -> QPixmap | None:
             )
             pixmap = QPixmap(tmp.name)
             if not pixmap.isNull():
+                # screencapture on Retina captures at physical (2x) resolution
+                # but the overlay uses logical screen coordinates.  Scale down
+                # to logical size so the overlay image matches the screen.
+                virtual_geo = QGuiApplication.primaryScreen().virtualGeometry()
+                if (pixmap.width() > virtual_geo.width()
+                        or pixmap.height() > virtual_geo.height()):
+                    dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+                    logical_w = int(pixmap.width() / dpr)
+                    logical_h = int(pixmap.height() / dpr)
+                    pixmap = pixmap.scaled(
+                        logical_w, logical_h,
+                        Qt.AspectRatioMode.IgnoreAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
                 return pixmap
         except (subprocess.SubprocessError, OSError):
             pass

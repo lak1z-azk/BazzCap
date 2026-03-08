@@ -60,9 +60,9 @@ Global keyboard shortcuts are registered with your desktop environment (GNOME or
 
 | Action             | Default Hotkey   |
 |--------------------|------------------|
-| Fullscreen Capture | Cmd+Shift+3      |
-| Region Capture     | Cmd+Shift+4      |
-| Window Capture     | Cmd+Shift+5      |
+| Fullscreen Capture | Cmd+Shift+1      |
+| Region Capture     | Cmd+Shift+2      |
+| Window Capture     | Cmd+Shift+6      |
 
 Hotkeys are fully customizable from the settings dialog inside BazzCap.
 
