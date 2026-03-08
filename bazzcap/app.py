@@ -887,8 +887,9 @@ class BazzCapApp:
 
         try:
             self.hotkey_manager.start()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[BazzCap] Hotkey manager failed to start: {e}",
+                  flush=True)
 
     def _on_hotkey_triggered(self, name: str, cursor_pos=None):
         action_map = {

@@ -76,9 +76,22 @@ class HotkeyManager:
                 self._bindings[combo.lower()] = name
         # Re-register desktop shortcuts with new bindings
         self._register_desktop_shortcuts()
-        # Rebuild macOS combo list if using manual listener
-        if IS_MACOS and hasattr(self, '_mac_combos'):
-            self._rebuild_mac_combos()
+        # Rebuild macOS combo list; start listener if it wasn't running
+        if IS_MACOS:
+            if hasattr(self, '_mac_combos'):
+                self._rebuild_mac_combos()
+                print(f"[BazzCap] Hotkeys updated ({len(self._mac_combos)} "
+                      f"registered)", flush=True)
+                for combo, name in self._bindings.items():
+                    print(f"[BazzCap]   {name}: {combo}", flush=True)
+            elif self._running:
+                # Listener was never started (e.g. pynput wasn't installed
+                # at startup but is now) — try starting it
+                try:
+                    self._start_pynput()
+                except Exception as e:
+                    print(f"[BazzCap] Failed to start hotkey listener: {e}",
+                          flush=True)
 
     def start(self):
         """Start listening for hotkeys."""
@@ -187,9 +200,36 @@ class HotkeyManager:
 
     # ── pynput backend ─────────────────────────────────────────────────
 
+    def _import_pynput_keyboard(self):
+        """Import pynput.keyboard, auto-installing pynput if needed."""
+        try:
+            from pynput import keyboard
+            return keyboard
+        except ImportError:
+            pass
+
+        # Auto-install pynput (needed for global hotkeys)
+        print("[BazzCap] pynput not found — installing automatically...",
+              flush=True)
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--quiet", "pynput"],
+                timeout=60,
+            )
+            from pynput import keyboard
+            print("[BazzCap] ✓ pynput installed successfully", flush=True)
+            return keyboard
+        except Exception as e:
+            print(f"[BazzCap] ✗ Failed to install pynput: {e}", flush=True)
+            print("[BazzCap]   Run manually:  pip3 install pynput",
+                  flush=True)
+            return None
+
     def _start_pynput(self):
         """Start hotkey listener using pynput."""
-        from pynput import keyboard
+        keyboard = self._import_pynput_keyboard()
+        if keyboard is None:
+            return
 
         if IS_MACOS:
             self._start_pynput_macos(keyboard)
@@ -218,20 +258,28 @@ class HotkeyManager:
         causing combos like <cmd>+<shift>+1 to never match.  We use a raw
         Listener with virtual-keycode matching instead.
         """
+        print("[BazzCap] Starting macOS hotkey listener...", flush=True)
+
         # Check accessibility permission
         try:
             from ApplicationServices import AXIsProcessTrusted
-            if not AXIsProcessTrusted():
+            trusted = AXIsProcessTrusted()
+            if trusted:
+                print("[BazzCap] ✓ Accessibility permission granted",
+                      flush=True)
+            else:
                 print(
-                    "[BazzCap] ⚠ Accessibility permission not granted.\n"
-                    "  Global hotkeys require Accessibility access.\n"
+                    "[BazzCap] ⚠ Accessibility permission NOT granted!\n"
+                    "  Global hotkeys WILL NOT WORK without this.\n"
                     "  Go to: System Settings → Privacy & Security "
                     "→ Accessibility\n"
-                    "  and add this application.",
+                    "  and add this application (or Terminal, if running "
+                    "from terminal).",
                     flush=True,
                 )
         except ImportError:
-            pass
+            print("[BazzCap] (could not check Accessibility — "
+                  "ApplicationServices unavailable)", flush=True)
 
         self._kb = kb
         self._mac_combos = []   # [(frozenset, target, is_vk, callback)]
@@ -239,9 +287,8 @@ class HotkeyManager:
 
         self._rebuild_mac_combos()
 
-        if not self._mac_combos:
-            return
-
+        # Always start the listener — combos may be added later via
+        # reregister() and will be picked up dynamically.
         def on_press(key):
             mod = self._canonical_mod(key)
             if mod:
@@ -266,6 +313,25 @@ class HotkeyManager:
             on_press=on_press, on_release=on_release
         )
         self._pynput_listener.start()
+
+        # Verify the listener thread is actually alive
+        time.sleep(0.1)
+        if self._pynput_listener.is_alive():
+            n = len(self._mac_combos)
+            print(f"[BazzCap] ✓ Hotkey listener active  "
+                  f"({n} hotkey{'s' if n != 1 else ''} registered)",
+                  flush=True)
+            for combo, name in self._bindings.items():
+                print(f"[BazzCap]   {name}: {combo}", flush=True)
+        else:
+            print(
+                "[BazzCap] ✗ Hotkey listener DIED immediately!\n"
+                "  This usually means Accessibility permission is missing.\n"
+                "  System Settings → Privacy & Security → Accessibility\n"
+                "  Add this app (or Terminal.app if running from terminal),\n"
+                "  then RESTART BazzCap.",
+                flush=True,
+            )
 
     def _rebuild_mac_combos(self):
         """(Re)build the parsed macOS hotkey combo list from _bindings."""
