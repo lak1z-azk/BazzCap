@@ -23,6 +23,7 @@ from PyQt6.QtGui import (
 
 from bazzcap.config import Config
 from bazzcap.overlay import RegionCaptureOverlay, grab_screenshot_via_portal
+from bazzcap.capture import capture_window as _capture_window_to_file
 from bazzcap.clipboard import copy_image_to_clipboard
 from bazzcap.history import HistoryManager, HistoryEntry
 from bazzcap.hotkeys import HotkeyManager
@@ -357,10 +358,165 @@ class MainWindow(QMainWindow):
         self.hide()
         QApplication.processEvents()
 
-        if cursor_pos is None:
-            cursor_pos = self._get_cursor_pos()
+        if mode == "fullscreen":
+            QTimer.singleShot(250, self._do_fullscreen_capture)
+        elif mode == "window":
+            QTimer.singleShot(250, self._do_window_capture)
+        else:
+            QTimer.singleShot(250, lambda: self._do_overlay_capture(mode))
 
-        QTimer.singleShot(250, lambda: self._do_overlay_capture(mode, cursor_pos))
+    @staticmethod
+    def _get_cursor_monitor_via_extension():
+        """Get cursor monitor info via BazzCap GNOME Shell extension.
+
+        The extension exposes org.bazzcap.Helper.GetCursorMonitor() on
+        the session bus, returning (connector, x, y, mon_x, mon_y, mon_w, mon_h).
+        Returns a dict with keys: connector, x, y, mon_x, mon_y, mon_w, mon_h
+        or None on failure.
+        """
+        import subprocess, re
+        try:
+            r = subprocess.run(
+                ["gdbus", "call", "--session",
+                 "--dest", "org.gnome.Shell",
+                 "--object-path", "/org/bazzcap/Helper",
+                 "--method", "org.bazzcap.Helper.GetCursorMonitor"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                # Output: ('DP-2', 1234, 567, 3440, 182, 1920, 1080)
+                m = re.search(
+                    r"\('([^']*)',\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)",
+                    r.stdout,
+                )
+                if m:
+                    return {
+                        "connector": m.group(1),
+                        "x": int(m.group(2)),
+                        "y": int(m.group(3)),
+                        "mon_x": int(m.group(4)),
+                        "mon_y": int(m.group(5)),
+                        "mon_w": int(m.group(6)),
+                        "mon_h": int(m.group(7)),
+                    }
+        except (subprocess.SubprocessError, OSError):
+            pass
+        return None
+
+    def _find_cursor_screen(self):
+        """Determine which Qt screen the cursor is on.
+
+        Uses the BazzCap GNOME Shell extension for reliable detection,
+        with multiple matching strategies:
+          1. Match by connector name (e.g. 'DP-2' == QScreen.name())
+          2. Match by monitor geometry (position + size)
+          3. Fallback to primary screen
+        """
+        screens = QGuiApplication.screens()
+        if len(screens) == 1:
+            return screens[0]
+
+        info = self._get_cursor_monitor_via_extension()
+        if info:
+            # Strategy 1: match by connector name
+            if info["connector"]:
+                for scr in screens:
+                    if scr.name() == info["connector"]:
+                        return scr
+
+            # Strategy 2: match by monitor geometry from compositor
+            if info["mon_w"] > 0 and info["mon_h"] > 0:
+                for scr in screens:
+                    geo = scr.geometry()
+                    if (geo.x() == info["mon_x"] and
+                        geo.y() == info["mon_y"] and
+                        geo.width() == info["mon_w"] and
+                        geo.height() == info["mon_h"]):
+                        return scr
+
+        # Fallback: primary screen
+        return QGuiApplication.primaryScreen()
+
+    @staticmethod
+    def _mute_event_sounds():
+        """Temporarily disable GNOME event sounds. Returns previous value."""
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["gsettings", "get", "org.gnome.desktop.sound", "event-sounds"],
+                capture_output=True, text=True, timeout=3,
+            )
+            was_on = "true" in (r.stdout or "").lower()
+            if was_on:
+                subprocess.run(
+                    ["gsettings", "set", "org.gnome.desktop.sound",
+                     "event-sounds", "false"],
+                    capture_output=True, timeout=3,
+                )
+            return was_on
+        except (subprocess.SubprocessError, OSError):
+            return None
+
+    @staticmethod
+    def _restore_event_sounds(was_on):
+        """Restore GNOME event sounds to previous state."""
+        import subprocess
+        if was_on:
+            try:
+                subprocess.run(
+                    ["gsettings", "set", "org.gnome.desktop.sound",
+                     "event-sounds", "true"],
+                    capture_output=True, timeout=3,
+                )
+            except (subprocess.SubprocessError, OSError):
+                pass
+
+    def _grab_screenshot_silent(self):
+        """Grab screenshot via portal with event sounds suppressed."""
+        was_on = self._mute_event_sounds()
+        try:
+            return grab_screenshot_via_portal()
+        finally:
+            QTimer.singleShot(500, lambda: self._restore_event_sounds(was_on))
+
+    def _do_fullscreen_capture(self):
+        """Capture the screen the mouse is on — no overlay, instant save."""
+        self._status.showMessage("Grabbing screen...")
+
+        screenshot = self._grab_screenshot_silent()
+        if screenshot is None or screenshot.isNull():
+            self._status.showMessage("Failed to grab screen!")
+            self.show()
+            self._notify("Capture failed", "Could not grab screen")
+            return
+
+        target_screen = self._find_cursor_screen()
+        geo = target_screen.geometry()
+        result = screenshot.copy(geo.x(), geo.y(), geo.width(), geo.height())
+        self._save_and_notify(result, "fullscreen")
+
+    def _do_window_capture(self):
+        """Capture the focused window — no overlay."""
+        self._status.showMessage("Capturing window...")
+
+        path = self._config.generate_filepath()
+        if _capture_window_to_file(path):
+            if os.path.isfile(path):
+                entry = HistoryEntry.create(path, "screenshot", "window")
+                self._history.add(entry)
+                self._refresh_history()
+                copy_image_to_clipboard(path)
+                self._notify("Window captured & copied",
+                             os.path.basename(path))
+                self._status.showMessage(f"Saved: {path}")
+            else:
+                self._status.showMessage("Failed to save window capture!")
+        else:
+            self._status.showMessage("Window capture failed!")
+            self._notify("Capture failed", "Could not capture window")
+
+        if getattr(self, '_was_visible', False):
+            self.show()
 
     @staticmethod
     def _get_cursor_pos():
@@ -377,10 +533,11 @@ class MainWindow(QMainWindow):
             pass
         return None
 
-    def _do_overlay_capture(self, mode: str, cursor_pos=None):
+    def _do_overlay_capture(self, mode: str):
+        """Region capture — show overlay on each screen, user selects area."""
         self._status.showMessage("Grabbing screen...")
 
-        screenshot = grab_screenshot_via_portal()
+        screenshot = self._grab_screenshot_silent()
 
         if screenshot is None or screenshot.isNull():
             self._status.showMessage("Failed to grab screen!")
@@ -388,16 +545,11 @@ class MainWindow(QMainWindow):
             self._notify("Capture failed", "Could not grab screen")
             return
 
-        overlay_mode = {
-            "fullscreen": RegionCaptureOverlay.MODE_FULLSCREEN,
-            "region": RegionCaptureOverlay.MODE_REGION,
-            "window": RegionCaptureOverlay.MODE_REGION,
-        }.get(mode, RegionCaptureOverlay.MODE_REGION)
-
         self._overlays = []
         screens = QGuiApplication.screens()
         for scr in screens:
-            ov = RegionCaptureOverlay(screenshot, overlay_mode, screen=scr)
+            ov = RegionCaptureOverlay(screenshot, RegionCaptureOverlay.MODE_REGION,
+                                      screen=scr)
             ov.capture_completed.connect(self._on_overlay_captured)
             ov.capture_cancelled.connect(self._on_overlay_cancelled)
             ov.overlay_activated.connect(self._on_overlay_activated)
@@ -418,14 +570,8 @@ class MainWindow(QMainWindow):
                 ov.deactivate()
         self._overlays = [active_overlay]
 
-    def _on_overlay_captured(self, pixmap: QPixmap):
-        for ov in getattr(self, '_overlays', []):
-            ov.hide()
-            ov.close()
-            ov.deleteLater()
-        self._overlays = []
-        self._overlay = None
-
+    def _save_and_notify(self, pixmap: QPixmap, capture_type: str = "region"):
+        """Save a pixmap, add to history, copy to clipboard, and notify."""
         if pixmap.isNull():
             if getattr(self, '_was_visible', False):
                 self.show()
@@ -437,21 +583,28 @@ class MainWindow(QMainWindow):
         pixmap.save(path, ext, quality)
 
         if os.path.isfile(path):
-            entry = HistoryEntry.create(path, "screenshot", "region")
+            entry = HistoryEntry.create(path, "screenshot", capture_type)
             self._history.add(entry)
             self._refresh_history()
-
             copy_image_to_clipboard(path)
-
             self._notify("Screenshot saved & copied",
                          os.path.basename(path))
-
             self._status.showMessage(f"Saved: {path}")
         else:
             self._status.showMessage("Failed to save capture!")
 
         if getattr(self, '_was_visible', False):
             self.show()
+
+    def _on_overlay_captured(self, pixmap: QPixmap):
+        for ov in getattr(self, '_overlays', []):
+            ov.hide()
+            ov.close()
+            ov.deleteLater()
+        self._overlays = []
+        self._overlay = None
+
+        self._save_and_notify(pixmap, "region")
 
     def _on_overlay_cancelled(self):
         for ov in getattr(self, '_overlays', []):

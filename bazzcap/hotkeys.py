@@ -295,6 +295,10 @@ class HotkeyManager:
         except Exception:
             pass
 
+        # Restore GNOME's default Print key (show-screenshot-ui) since
+        # BazzCap is no longer capturing with any custom keybinding.
+        self._restore_gnome_print_key(gs)
+
     def _register_desktop_shortcuts(self):
         """Register shortcuts with GNOME or KDE."""
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
@@ -390,6 +394,48 @@ class HotkeyManager:
                 gs("set", schema, key, paths_str)
             except (subprocess.SubprocessError, OSError):
                 pass
+
+        # Manage the system Print key: if BazzCap is using bare "Print"
+        # as a custom keybinding, suppress GNOME's built-in screenshot UI.
+        # If BazzCap is NOT using "Print", restore GNOME's default.
+        bazzcap_uses_print = any(
+            self._to_gnome_combo(c) == "Print" for c in self._bindings
+        )
+        self._manage_gnome_print_key(gs, bazzcap_uses_print)
+
+    @staticmethod
+    def _manage_gnome_print_key(gs, bazzcap_owns_print: bool):
+        """Manage GNOME's show-screenshot-ui keybinding for the Print key.
+
+        GNOME's default is Print → show-screenshot-ui (interactive screenshot).
+        When BazzCap claims Print for fullscreen capture, the custom keybinding
+        overrides the shell keybinding.  When BazzCap releases Print (user
+        changed to a different key), we restore the GNOME default so the
+        native screenshot UI works again.
+        """
+        shell_schema = "org.gnome.shell.keybindings"
+        shell_key = "show-screenshot-ui"
+        try:
+            if bazzcap_owns_print:
+                # BazzCap is using Print — clear the shell binding to avoid
+                # any potential conflict (custom keybindings take priority
+                # anyway, but this keeps things clean).
+                gs("set", shell_schema, shell_key, "@as []")
+            else:
+                # BazzCap is NOT using Print — restore GNOME's default so
+                # the native interactive screenshot UI works on Print.
+                gs("set", shell_schema, shell_key, "['Print']")
+        except (subprocess.SubprocessError, OSError):
+            pass
+
+    @staticmethod
+    def _restore_gnome_print_key(gs):
+        """Restore GNOME's default Print → show-screenshot-ui binding."""
+        try:
+            gs("set", "org.gnome.shell.keybindings",
+               "show-screenshot-ui", "['Print']")
+        except (subprocess.SubprocessError, OSError):
+            pass
 
     @staticmethod
     def _to_gnome_combo(combo: str) -> str:
