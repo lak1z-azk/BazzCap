@@ -30,6 +30,61 @@ from bazzcap.hotkeys import HotkeyManager
 from bazzcap.hotkey_settings import HotkeySettingsDialog
 
 
+class _FullscreenPicker(QWidget):
+    """Lightweight transparent click-catcher for fullscreen capture.
+
+    Shows the screenshot as background on the target screen.
+    One click = capture that screen.  Right-click or Escape = cancel.
+    No toolbar, no dimming, no editor.
+    """
+
+    screen_picked = pyqtSignal(object, QPixmap)   # (QScreen, cropped pixmap)
+    pick_cancelled = pyqtSignal()
+
+    def __init__(self, screenshot: QPixmap, screen):
+        super().__init__()
+        self._screen = screen
+        self._active = True
+        geo = screen.geometry()
+        self._cropped = screenshot.copy(geo.x(), geo.y(),
+                                        geo.width(), geo.height())
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._cropped)
+        # Subtle border highlight so user knows it's clickable
+        p.setPen(QPen(QColor(137, 180, 250, 120), 4))
+        p.drawRect(self.rect().adjusted(2, 2, -2, -2))
+        p.end()
+
+    def mousePressEvent(self, event):
+        if not self._active:
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._active = False
+            self.screen_picked.emit(self._screen, self._cropped)
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._active = False
+            self.pick_cancelled.emit()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self._active = False
+            self.pick_cancelled.emit()
+
+    def deactivate(self):
+        self._active = False
+        self.hide()
+        self.close()
+        self.deleteLater()
+
+
 class SettingsDialog(QDialog):
 
     def __init__(self, config: Config, parent=None):
@@ -410,9 +465,8 @@ class MainWindow(QMainWindow):
     def _do_fullscreen_capture(self):
         """Capture the full screen the mouse is on.
 
-        Uses the same multi-overlay approach as region capture:
-        overlays appear on all screens, and the first one clicked
-        instantly captures that screen's full area.
+        Shows a clean screenshot on each monitor — click to capture
+        that screen.  No toolbar, no dimming, no editor.
         """
         self._status.showMessage("Click a screen to capture...")
 
@@ -423,7 +477,6 @@ class MainWindow(QMainWindow):
             self._notify("Capture failed", "Could not grab screen")
             return
 
-        self._overlays = []
         screens = QGuiApplication.screens()
 
         if len(screens) == 1:
@@ -431,21 +484,33 @@ class MainWindow(QMainWindow):
             self._save_and_notify(screenshot, "fullscreen")
             return
 
+        self._fs_pickers = []
         for scr in screens:
-            ov = RegionCaptureOverlay(
-                screenshot, RegionCaptureOverlay.MODE_FULLSCREEN, screen=scr
-            )
-            ov.capture_completed.connect(self._on_overlay_captured)
-            ov.capture_cancelled.connect(self._on_overlay_cancelled)
-            ov.overlay_activated.connect(self._on_overlay_activated)
-            self._overlays.append(ov)
+            picker = _FullscreenPicker(screenshot, scr)
+            picker.screen_picked.connect(self._on_fullscreen_picked)
+            picker.pick_cancelled.connect(self._on_fullscreen_cancelled)
+            self._fs_pickers.append(picker)
 
-        for ov in self._overlays:
-            ov.winId()
-            ov.windowHandle().setScreen(ov._target_screen)
-            ov.showFullScreen()
+        for picker in self._fs_pickers:
+            picker.winId()
+            picker.windowHandle().setScreen(picker._screen)
+            picker.showFullScreen()
 
-        self._overlay = None
+    def _on_fullscreen_picked(self, screen, pixmap):
+        """User clicked a screen — save that screen's capture."""
+        for p in getattr(self, '_fs_pickers', []):
+            p.deactivate()
+        self._fs_pickers = []
+        self._save_and_notify(pixmap, "fullscreen")
+
+    def _on_fullscreen_cancelled(self):
+        """User cancelled fullscreen pick (Esc or right-click)."""
+        for p in getattr(self, '_fs_pickers', []):
+            p.deactivate()
+        self._fs_pickers = []
+        if getattr(self, '_was_visible', False):
+            self.show()
+        self._status.showMessage("Fullscreen capture cancelled")
 
     def _do_window_capture(self):
         """Capture the focused window — no overlay."""
