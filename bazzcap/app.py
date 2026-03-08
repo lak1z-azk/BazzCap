@@ -30,6 +30,41 @@ from bazzcap.hotkeys import HotkeyManager
 from bazzcap.hotkey_settings import HotkeySettingsDialog
 
 
+class _ScreenDetector(QWidget):
+    """Invisible fullscreen overlay that detects cursor presence via pointer events.
+
+    On Wayland, apps cannot query cursor position.  By showing a nearly-
+    invisible fullscreen window on each screen, the compositor sends a
+    pointer-enter event to the one under the cursor — revealing which
+    screen the cursor is on.  No GNOME Shell extension needed.
+    """
+
+    screen_detected = pyqtSignal(object)  # emits the QScreen
+
+    def __init__(self, screen):
+        super().__init__()
+        self._screen = screen
+        self._fired = False
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Nearly invisible (alpha ≈ 1/255) so compositor still delivers events
+        self.setWindowOpacity(0.01)
+
+    def enterEvent(self, event):
+        if not self._fired:
+            self._fired = True
+            self.screen_detected.emit(self._screen)
+
+    def mouseMoveEvent(self, event):
+        if not self._fired:
+            self._fired = True
+            self.screen_detected.emit(self._screen)
+
+
 class SettingsDialog(QDialog):
 
     def __init__(self, config: Config, parent=None):
@@ -365,77 +400,56 @@ class MainWindow(QMainWindow):
         else:
             QTimer.singleShot(250, lambda: self._do_overlay_capture(mode))
 
-    @staticmethod
-    def _get_cursor_monitor_via_extension():
-        """Get cursor monitor info via BazzCap GNOME Shell extension.
+    # ── Cursor screen detection (pure app, no extension) ────────────
 
-        The extension exposes org.bazzcap.Helper.GetCursorMonitor() on
-        the session bus, returning (connector, x, y, mon_x, mon_y, mon_w, mon_h).
-        Returns a dict with keys: connector, x, y, mon_x, mon_y, mon_w, mon_h
-        or None on failure.
-        """
-        import subprocess, re
-        try:
-            r = subprocess.run(
-                ["gdbus", "call", "--session",
-                 "--dest", "org.gnome.Shell",
-                 "--object-path", "/org/bazzcap/Helper",
-                 "--method", "org.bazzcap.Helper.GetCursorMonitor"],
-                capture_output=True, text=True, timeout=3,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                # Output: ('DP-2', 1234, 567, 3440, 182, 1920, 1080)
-                m = re.search(
-                    r"\('([^']*)',\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)",
-                    r.stdout,
-                )
-                if m:
-                    return {
-                        "connector": m.group(1),
-                        "x": int(m.group(2)),
-                        "y": int(m.group(3)),
-                        "mon_x": int(m.group(4)),
-                        "mon_y": int(m.group(5)),
-                        "mon_w": int(m.group(6)),
-                        "mon_h": int(m.group(7)),
-                    }
-        except (subprocess.SubprocessError, OSError):
-            pass
-        return None
+    def _detect_cursor_screen(self, callback):
+        """Detect which screen the cursor is on, then call *callback(screen)*.
 
-    def _find_cursor_screen(self):
-        """Determine which Qt screen the cursor is on.
-
-        Uses the BazzCap GNOME Shell extension for reliable detection,
-        with multiple matching strategies:
-          1. Match by connector name (e.g. 'DP-2' == QScreen.name())
-          2. Match by monitor geometry (position + size)
-          3. Fallback to primary screen
+        Creates a nearly-invisible fullscreen overlay on every screen.
+        The compositor delivers a pointer-enter event to the one under
+        the cursor.  Works on any Wayland compositor — no GNOME Shell
+        extension required.
         """
         screens = QGuiApplication.screens()
         if len(screens) == 1:
-            return screens[0]
+            callback(screens[0])
+            return
 
-        info = self._get_cursor_monitor_via_extension()
-        if info:
-            # Strategy 1: match by connector name
-            if info["connector"]:
-                for scr in screens:
-                    if scr.name() == info["connector"]:
-                        return scr
+        self._screen_detect_cb = callback
+        self._screen_detectors = []
 
-            # Strategy 2: match by monitor geometry from compositor
-            if info["mon_w"] > 0 and info["mon_h"] > 0:
-                for scr in screens:
-                    geo = scr.geometry()
-                    if (geo.x() == info["mon_x"] and
-                        geo.y() == info["mon_y"] and
-                        geo.width() == info["mon_w"] and
-                        geo.height() == info["mon_h"]):
-                        return scr
+        for scr in screens:
+            det = _ScreenDetector(scr)
+            det.screen_detected.connect(self._on_screen_detected)
+            self._screen_detectors.append(det)
 
-        # Fallback: primary screen
-        return QGuiApplication.primaryScreen()
+        # Place each detector on its screen (same trick as region overlay)
+        for det in self._screen_detectors:
+            det.winId()
+            det.windowHandle().setScreen(det._screen)
+            det.showFullScreen()
+
+        # Safety timeout: if no pointer-enter after 3 s, use primary
+        self._detect_timeout = QTimer()
+        self._detect_timeout.setSingleShot(True)
+        self._detect_timeout.timeout.connect(
+            lambda: self._on_screen_detected(QGuiApplication.primaryScreen())
+        )
+        self._detect_timeout.start(3000)
+
+    def _on_screen_detected(self, screen):
+        """Called when a _ScreenDetector receives a pointer-enter event."""
+        if hasattr(self, '_detect_timeout'):
+            self._detect_timeout.stop()
+        for det in getattr(self, '_screen_detectors', []):
+            det.close()
+            det.deleteLater()
+        self._screen_detectors = []
+
+        cb = getattr(self, '_screen_detect_cb', None)
+        self._screen_detect_cb = None
+        if cb:
+            cb(screen)
 
     @staticmethod
     def _mute_event_sounds():
@@ -483,6 +497,7 @@ class MainWindow(QMainWindow):
         """Capture the screen the mouse is on — no overlay, instant save."""
         self._status.showMessage("Grabbing screen...")
 
+        # Step 1: screenshot first (clean desktop, no detection overlay)
         screenshot = self._grab_screenshot_silent()
         if screenshot is None or screenshot.isNull():
             self._status.showMessage("Failed to grab screen!")
@@ -490,7 +505,19 @@ class MainWindow(QMainWindow):
             self._notify("Capture failed", "Could not grab screen")
             return
 
-        target_screen = self._find_cursor_screen()
+        self._pending_fullscreen = screenshot
+
+        # Step 2: detect cursor screen (overlay appears briefly AFTER the
+        #         screenshot is already taken, so image is clean)
+        self._detect_cursor_screen(self._finish_fullscreen_capture)
+
+    def _finish_fullscreen_capture(self, target_screen):
+        """Crop pending screenshot to the detected screen and save."""
+        screenshot = getattr(self, '_pending_fullscreen', None)
+        self._pending_fullscreen = None
+        if screenshot is None or screenshot.isNull():
+            return
+
         geo = target_screen.geometry()
         result = screenshot.copy(geo.x(), geo.y(), geo.width(), geo.height())
         self._save_and_notify(result, "fullscreen")

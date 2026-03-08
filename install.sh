@@ -61,6 +61,12 @@ else:
     rm -f "$ICON_DIR/bazzcap.svg"
     rm -rf "$INSTALL_DIR"
 
+    # Clean up legacy GNOME Shell extension (removed in v2)
+    rm -rf "$HOME/.local/share/gnome-shell/extensions/bazzcap-helper@bazzcap" 2>/dev/null
+    if command -v gnome-extensions &>/dev/null; then
+        gnome-extensions disable bazzcap-helper@bazzcap 2>/dev/null || true
+    fi
+
     update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
     gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
@@ -273,6 +279,12 @@ else
 fi
 
 gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+
+# Clean up legacy GNOME Shell extension if present
+rm -rf "$HOME/.local/share/gnome-shell/extensions/bazzcap-helper@bazzcap" 2>/dev/null
+if command -v gnome-extensions &>/dev/null; then
+    gnome-extensions disable bazzcap-helper@bazzcap 2>/dev/null || true
+fi
 
 echo
 echo "[6/8] Creating launcher and desktop entry..."

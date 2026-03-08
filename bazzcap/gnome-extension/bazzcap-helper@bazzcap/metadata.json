@@ -1,8 +1,0 @@
-{
-    "uuid": "bazzcap-helper@bazzcap",
-    "name": "BazzCap Helper",
-    "description": "Exposes cursor position and monitor info for BazzCap screenshot tool",
-    "shell-version": ["45", "46", "47", "48", "49"],
-    "version": 1,
-    "url": "https://github.com/lak1z-azk/BazzCap"
-}
