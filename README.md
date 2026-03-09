@@ -62,7 +62,7 @@ Global keyboard shortcuts are registered with your desktop environment (GNOME or
 |--------------------|------------------|
 | Fullscreen Capture | Cmd+Shift+1      |
 | Region Capture     | Cmd+Shift+2      |
-| Window Capture     | Cmd+Shift+6      |
+| Window Capture     | Cmd+Shift+W      |
 
 Hotkeys are fully customizable from the settings dialog inside BazzCap.
 

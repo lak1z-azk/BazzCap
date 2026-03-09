@@ -296,7 +296,7 @@ class HotkeySettingsDialog(QDialog):
             defaults = {
                 "fullscreen": "<Super><Shift>1",
                 "region": "<Super><Shift>2",
-                "window": "<Super><Shift>6",
+                "window": "<Super><Shift>w",
             }
         else:
             defaults = {

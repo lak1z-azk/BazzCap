@@ -38,11 +38,27 @@ if IS_MACOS:
         'p': 0x23, 'q': 0x0C, 'r': 0x0F, 's': 0x01, 't': 0x11,
         'u': 0x20, 'v': 0x09, 'w': 0x0D, 'x': 0x07, 'y': 0x10,
         'z': 0x06,
+        # Symbols and punctuation (kVK_ANSI_* from Events.h)
+        '-': 0x1B, '=': 0x18, '[': 0x21, ']': 0x1E,
+        ';': 0x29, "'": 0x27, ',': 0x2B, '.': 0x2F,
+        '/': 0x2C, '\\': 0x2A, '`': 0x32,
+    }
+
+    # Multi-character key names → VK codes (from hotkey_settings.py names)
+    _MACOS_VK_NAMED = {
+        'minus': 0x1B, 'equal': 0x18,
+        'bracketleft': 0x21, 'bracketright': 0x1E,
+        'semicolon': 0x29, 'apostrophe': 0x27,
+        'comma': 0x2B, 'period': 0x2F,
+        'slash': 0x2C, 'backslash': 0x2A, 'grave': 0x32,
     }
 
 
 class HotkeyManager:
     """Register and manage global hotkeys."""
+
+    # Signal-like callback for GUI notifications (set by BazzCapApp)
+    accessibility_missing = None  # callable or None
 
     def __init__(self):
         self._listeners = {}     # hotkey_name -> callback
@@ -261,6 +277,7 @@ class HotkeyManager:
         print("[BazzCap] Starting macOS hotkey listener...", flush=True)
 
         # Check accessibility permission
+        self._mac_accessibility_ok = True
         try:
             from ApplicationServices import AXIsProcessTrusted
             trusted = AXIsProcessTrusted()
@@ -268,6 +285,7 @@ class HotkeyManager:
                 print("[BazzCap] ✓ Accessibility permission granted",
                       flush=True)
             else:
+                self._mac_accessibility_ok = False
                 print(
                     "[BazzCap] ⚠ Accessibility permission NOT granted!\n"
                     "  Global hotkeys WILL NOT WORK without this.\n"
@@ -277,6 +295,12 @@ class HotkeyManager:
                     "from terminal).",
                     flush=True,
                 )
+                # Notify GUI so the user sees a dialog (not just stdout)
+                if self.accessibility_missing:
+                    try:
+                        self.accessibility_missing()
+                    except Exception:
+                        pass
         except ImportError:
             print("[BazzCap] (could not check Accessibility — "
                   "ApplicationServices unavailable)", flush=True)
@@ -332,6 +356,11 @@ class HotkeyManager:
                 "  then RESTART BazzCap.",
                 flush=True,
             )
+            if self.accessibility_missing:
+                try:
+                    self.accessibility_missing()
+                except Exception:
+                    pass
 
     def _rebuild_mac_combos(self):
         """(Re)build the parsed macOS hotkey combo list from _bindings."""
@@ -344,6 +373,9 @@ class HotkeyManager:
             if parsed:
                 mods, target, is_vk = parsed
                 self._mac_combos.append((mods, target, is_vk, callback))
+            else:
+                print(f"[BazzCap] ⚠ Hotkey '{name}' ({combo}) was NOT "
+                      f"registered — could not parse combo", flush=True)
 
     def _parse_macos_combo(self, combo_str):
         """Parse '<super><shift>1' → (frozenset({'cmd','shift'}), 0x12, True)."""
@@ -352,8 +384,8 @@ class HotkeyManager:
         mod_map = {
             '<ctrl>': 'ctrl', '<control>': 'ctrl',
             '<shift>': 'shift',
-            '<alt>': 'alt',
-            '<super>': 'cmd', '<meta>': 'cmd',
+            '<alt>': 'alt', '<option>': 'alt',
+            '<super>': 'cmd', '<meta>': 'cmd', '<cmd>': 'cmd',
         }
 
         mods = set()
@@ -375,10 +407,25 @@ class HotkeyManager:
             ('enter', ['enter', 'return']),
             ('esc', ['escape', 'esc']),
             ('delete', ['delete']), ('backspace', ['backspace']),
+            ('print_screen', ['print', 'printscreen', 'print_screen']),
             ('f1', ['f1']), ('f2', ['f2']), ('f3', ['f3']),
             ('f4', ['f4']), ('f5', ['f5']), ('f6', ['f6']),
             ('f7', ['f7']), ('f8', ['f8']), ('f9', ['f9']),
             ('f10', ['f10']), ('f11', ['f11']), ('f12', ['f12']),
+            # Navigation keys
+            ('home', ['home']), ('end', ['end']),
+            ('page_up', ['page_up', 'pageup']),
+            ('page_down', ['page_down', 'pagedown']),
+            ('insert', ['insert']),
+            # Arrow keys
+            ('up', ['up']), ('down', ['down']),
+            ('left', ['left']), ('right', ['right']),
+            # Misc
+            ('pause', ['pause']),
+            ('scroll_lock', ['scroll_lock', 'scrolllock']),
+            ('caps_lock', ['caps_lock', 'capslock']),
+            ('num_lock', ['num_lock', 'numlock']),
+            ('menu', ['menu']),
         ]:
             key_obj = getattr(kb.Key, attr, None)
             if key_obj is not None:
@@ -394,6 +441,13 @@ class HotkeyManager:
             if vk is not None:
                 return (frozenset(mods), vk, True)
 
+        # Multi-character named keys (e.g. 'minus', 'comma' from hotkey_settings)
+        vk = _MACOS_VK_NAMED.get(remaining)
+        if vk is not None:
+            return (frozenset(mods), vk, True)
+
+        print(f"[BazzCap] ⚠ Could not parse macOS hotkey: '{combo_str}' "
+              f"(unrecognized key: '{remaining}')", flush=True)
         return None
 
     def _mac_key_matches(self, pressed, target, is_vk):

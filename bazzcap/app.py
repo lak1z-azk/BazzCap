@@ -830,6 +830,7 @@ class SystemTray(QSystemTrayIcon):
 
 class _HotkeyBridge(QObject):
     trigger = pyqtSignal(str, object)
+    accessibility_alert = pyqtSignal()
 
 
 class BazzCapApp:
@@ -847,6 +848,13 @@ class BazzCapApp:
         self._hotkey_bridge.trigger.connect(
             lambda name, pos: self._on_hotkey_triggered(name, pos)
         )
+        if IS_MACOS:
+            self._hotkey_bridge.accessibility_alert.connect(
+                self._show_accessibility_dialog
+            )
+            self.hotkey_manager.accessibility_missing = (
+                lambda: self._hotkey_bridge.accessibility_alert.emit()
+            )
 
         self.main_window = MainWindow(self.config, self.history)
         self.tray = SystemTray()
@@ -861,6 +869,34 @@ class BazzCapApp:
         self._setup_hotkeys()
 
         self.app._bazzcap_app = self
+
+    def _show_accessibility_dialog(self):
+        """Show a GUI dialog when macOS Accessibility permission is missing."""
+        msg = QMessageBox(self.main_window)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Accessibility Permission Required")
+        msg.setText(
+            "BazzCap needs Accessibility permission for global hotkeys."
+        )
+        msg.setInformativeText(
+            "Go to:\n"
+            "  System Settings \u2192 Privacy & Security \u2192 Accessibility\n\n"
+            "Add this application (or Terminal, if running from terminal), "
+            "then restart BazzCap.\n\n"
+            "Without this permission, hotkeys will not work. "
+            "You can still capture via the UI buttons and tray menu."
+        )
+        open_btn = msg.addButton(
+            "Open System Settings", QMessageBox.ButtonRole.ActionRole
+        )
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        if msg.clickedButton() == open_btn:
+            subprocess.Popen(
+                ["open", "x-apple.systempreferences:"
+                 "com.apple.preference.security?Privacy_Accessibility"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
 
     def _reregister_hotkeys(self):
         hotkeys = self.config.get("hotkeys", {})
