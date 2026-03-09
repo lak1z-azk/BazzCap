@@ -309,6 +309,19 @@ class HotkeyManager:
         self._mac_combos = []   # [(frozenset, target, is_vk, callback)]
         self._mac_pressed = set()  # canonical modifier names currently held
 
+        # Use Quartz for reliable modifier detection — pynput's modifier
+        # press/release tracking via kCGEventFlagsChanged is unreliable
+        # on some macOS versions and pynput builds.
+        try:
+            import Quartz
+            self._quartz = Quartz
+            print("[BazzCap] ✓ Using Quartz for modifier detection",
+                  flush=True)
+        except ImportError:
+            self._quartz = None
+            print("[BazzCap] Quartz unavailable, using pynput modifier "
+                  "tracking (may be unreliable)", flush=True)
+
         self._rebuild_mac_combos()
 
         # Always start the listener — combos may be added later via
@@ -317,9 +330,17 @@ class HotkeyManager:
             mod = self._canonical_mod(key)
             if mod:
                 self._mac_pressed.add(mod)
+
+            # Query actual modifier state from macOS (reliable) or
+            # fall back to manually tracked set
+            if self._quartz:
+                current_mods = self._get_current_mods_quartz()
+            else:
+                current_mods = self._mac_pressed
+
             # Check all registered combos
             for req_mods, target, is_vk, cb in self._mac_combos:
-                if not req_mods.issubset(self._mac_pressed):
+                if not req_mods.issubset(current_mods):
                     continue
                 if self._mac_key_matches(key, target, is_vk):
                     try:
@@ -480,6 +501,28 @@ class HotkeyManager:
                     if k is not None:
                         self._mod_lookup[k] = name
         return self._mod_lookup.get(key)
+
+    def _get_current_mods_quartz(self):
+        """Query macOS for currently held modifier keys via Quartz.
+
+        This is more reliable than tracking individual pynput modifier
+        press/release events, which can miss events on some macOS
+        versions due to kCGEventFlagsChanged handling quirks.
+        """
+        Q = self._quartz
+        flags = Q.CGEventSourceFlagsState(
+            Q.kCGEventSourceStateCombinedSessionState
+        )
+        mods = set()
+        if flags & Q.kCGEventFlagMaskCommand:
+            mods.add('cmd')
+        if flags & Q.kCGEventFlagMaskShift:
+            mods.add('shift')
+        if flags & Q.kCGEventFlagMaskControl:
+            mods.add('ctrl')
+        if flags & Q.kCGEventFlagMaskAlternate:
+            mods.add('alt')
+        return mods
 
     @staticmethod
     def _to_pynput_combo(combo: str) -> str | None:
