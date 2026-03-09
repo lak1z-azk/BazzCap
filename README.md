@@ -62,7 +62,7 @@ Global keyboard shortcuts are registered with your desktop environment (GNOME or
 |--------------------|------------------|
 | Fullscreen Capture | Cmd+Shift+1      |
 | Region Capture     | Cmd+Shift+2      |
-| Window Capture     | Cmd+Shift+6      |
+| Window Capture     | Cmd+Shift+W      |
 
 > **⚠️ Known Issue:** Global hotkeys are currently **not working on macOS**. This is under investigation. For now, use the system tray icon or the buttons in the main window to start captures. Hotkeys work normally on Linux.
 
