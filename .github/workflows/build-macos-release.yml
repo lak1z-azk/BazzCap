@@ -1,0 +1,35 @@
+name: Build macOS Release Asset
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to upload macOS zip to"
+        required: true
+        default: "v1.1.2"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build macOS bundle zip
+        run: |
+          chmod +x scripts/build_macos_bundle.sh
+          ./scripts/build_macos_bundle.sh
+
+      - name: Upload macOS zip to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: dist/*-macOS.zip
