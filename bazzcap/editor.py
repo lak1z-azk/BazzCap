@@ -1,6 +1,7 @@
 
 import os
 import math
+import logging
 from enum import Enum ,auto
 
 from PyQt6 .QtWidgets import (
@@ -20,6 +21,8 @@ QPixmap ,QImage ,QPen ,QBrush ,QColor ,QPainter ,QFont ,
 QAction ,QIcon ,QPainterPath ,QPolygonF ,QKeySequence ,
 QTransform ,QCursor ,
 )
+
+logger =logging .getLogger (__name__)
 
 class Tool (Enum ):
     SELECT =auto ()
@@ -114,7 +117,7 @@ class BlurItem (QGraphicsRectItem ):
 
     def paint (self ,painter ,option ,widget =None ):
         if self ._blurred and hasattr (self ,'_src_rect'):
-            painter .drawPixmap (self .rect ().toRect (),self ._blurred )
+            painter .drawPixmap (self .rect ().toRect (),self ._blurred ,self ._blurred .rect ())
         else :
             painter .setBrush (QBrush (QColor (128 ,128 ,128 ,180 )))
             painter .setPen (Qt .PenStyle .NoPen )
@@ -177,9 +180,12 @@ class UndoStack :
         self ._redo_stack :list [QGraphicsItem ]=[]
 
     def push (self ,item :QGraphicsItem ):
-        self ._scene .addItem (item )
-        self ._undo_stack .append (item )
-        self ._redo_stack .clear ()
+        try :
+            self ._scene .addItem (item )
+            self ._undo_stack .append (item )
+            self ._redo_stack .clear ()
+        except Exception :
+            logger .exception ("Failed to push item to undo stack")
 
     def undo (self ):
         if self ._undo_stack :
@@ -241,8 +247,12 @@ class EditorCanvas (QGraphicsView ):
         self .setDragMode (QGraphicsView .DragMode .NoDrag )
         self .setTransformationAnchor (QGraphicsView .ViewportAnchor .AnchorUnderMouse )
         self .setResizeAnchor (QGraphicsView .ViewportAnchor .AnchorUnderMouse )
+        self .setBackgroundBrush (QColor (9 ,13 ,18 ))
+        self .setFrameShape (QGraphicsView .Shape .NoFrame )
 
-        self .fitInView (self ._bg_item ,Qt .AspectRatioMode .KeepAspectRatio )
+        self ._user_zoomed =False
+        self ._initial_fit_pending =True
+        self ._fit_to_view ()
 
     @property
     def tool (self ):
@@ -291,146 +301,182 @@ class EditorCanvas (QGraphicsView ):
         Qt .PenJoinStyle .RoundJoin )
 
     def mousePressEvent (self ,event ):
-        if event .button ()!=Qt .MouseButton .LeftButton :
-            return super ().mousePressEvent (event )
+        try :
+            if event .button ()!=Qt .MouseButton .LeftButton :
+                return super ().mousePressEvent (event )
 
-        pos =self .mapToScene (event .pos ())
-        self ._start_pos =pos
-        self ._drawing =True
+            pos =self .mapToScene (event .pos ())
+            self ._start_pos =pos
+            self ._drawing =True
 
-        if self ._tool ==Tool .SELECT :
-            super ().mousePressEvent (event )
-            return
+            if self ._tool ==Tool .SELECT :
+                super ().mousePressEvent (event )
+                return
 
-        if self ._tool ==Tool .FREEHAND :
-            self ._freehand_path =QPainterPath ()
-            self ._freehand_path .moveTo (pos )
-            self ._current_item =QGraphicsPathItem (self ._freehand_path )
-            self ._current_item .setPen (self ._pen ())
-            self ._scene .addItem (self ._current_item )
+            if self ._tool ==Tool .FREEHAND :
+                self ._freehand_path =QPainterPath ()
+                self ._freehand_path .moveTo (pos )
+                self ._current_item =QGraphicsPathItem (self ._freehand_path )
+                self ._current_item .setPen (self ._pen ())
+                self ._scene .addItem (self ._current_item )
 
-        elif self ._tool ==Tool .TEXT :
-            text_item =QGraphicsTextItem ("Text")
-            text_item .setDefaultTextColor (self ._color )
-            text_item .setFont (QFont ("Sans",self ._font_size ))
-            text_item .setPos (pos )
-            text_item .setTextInteractionFlags (
-            Qt .TextInteractionFlag .TextEditorInteraction
-            )
-            text_item .setFlags (
-            QGraphicsItem .GraphicsItemFlag .ItemIsMovable |
-            QGraphicsItem .GraphicsItemFlag .ItemIsSelectable
-            )
-            self ._undo_stack .push (text_item )
+            elif self ._tool ==Tool .TEXT :
+                text_item =QGraphicsTextItem ("Text")
+                text_item .setDefaultTextColor (self ._color )
+                text_item .setFont (QFont ("Sans",self ._font_size ))
+                text_item .setPos (pos )
+                text_item .setTextInteractionFlags (
+                Qt .TextInteractionFlag .TextEditorInteraction
+                )
+                text_item .setFlags (
+                QGraphicsItem .GraphicsItemFlag .ItemIsMovable |
+                QGraphicsItem .GraphicsItemFlag .ItemIsSelectable
+                )
+                self ._undo_stack .push (text_item )
+                self ._drawing =False
+
+            elif self ._tool ==Tool .STEP_MARKER :
+                marker =StepMarkerItem (pos ,self ._color )
+                self ._undo_stack .push (marker )
+                self ._drawing =False
+
+            elif self ._tool in (Tool .RECTANGLE ,Tool .ELLIPSE ,Tool .LINE ,
+            Tool .ARROW ,Tool .BLUR ,Tool .HIGHLIGHT ,Tool .CROP ):
+                pass
+        except Exception :
             self ._drawing =False
-
-        elif self ._tool ==Tool .STEP_MARKER :
-            marker =StepMarkerItem (pos ,self ._color )
-            self ._undo_stack .push (marker )
-            self ._drawing =False
-
-        elif self ._tool in (Tool .RECTANGLE ,Tool .ELLIPSE ,Tool .LINE ,
-        Tool .ARROW ,Tool .BLUR ,Tool .HIGHLIGHT ,Tool .CROP ):
-            pass
+            self ._current_item =None
+            logger .exception ("Editor mousePressEvent crashed (tool=%s)",self ._tool )
 
     def mouseMoveEvent (self ,event ):
-        if not self ._drawing :
-            return super ().mouseMoveEvent (event )
+        try :
+            if not self ._drawing :
+                return super ().mouseMoveEvent (event )
 
-        pos =self .mapToScene (event .pos ())
+            pos =self .mapToScene (event .pos ())
 
-        if self ._tool ==Tool .FREEHAND and self ._freehand_path :
-            self ._freehand_path .lineTo (pos )
-            self ._current_item .setPath (self ._freehand_path )
-            return
+            if self ._tool ==Tool .FREEHAND and self ._freehand_path and self ._current_item :
+                self ._freehand_path .lineTo (pos )
+                self ._current_item .setPath (self ._freehand_path )
+                return
 
-        rect =QRectF (self ._start_pos ,pos ).normalized ()
-        line =QLineF (self ._start_pos ,pos )
+            rect =QRectF (self ._start_pos ,pos ).normalized ()
+            line =QLineF (self ._start_pos ,pos )
 
-        if self ._current_item and self ._current_item .scene ():
-            self ._scene .removeItem (self ._current_item )
+            if self ._current_item :
+                try :
+                    if self ._current_item .scene ():
+                        self ._scene .removeItem (self ._current_item )
+                except RuntimeError :
+                    self ._current_item =None
 
-        if self ._tool ==Tool .RECTANGLE :
-            item =QGraphicsRectItem (rect )
-            item .setPen (self ._pen ())
-            item .setBrush (Qt .BrushStyle .NoBrush )
-            self ._current_item =item
-            self ._scene .addItem (item )
+            if self ._tool ==Tool .RECTANGLE :
+                item =QGraphicsRectItem (rect )
+                item .setPen (self ._pen ())
+                item .setBrush (QBrush (Qt .BrushStyle .NoBrush ))
+                self ._current_item =item
+                self ._scene .addItem (item )
 
-        elif self ._tool ==Tool .ELLIPSE :
-            item =QGraphicsEllipseItem (rect )
-            item .setPen (self ._pen ())
-            item .setBrush (Qt .BrushStyle .NoBrush )
-            self ._current_item =item
-            self ._scene .addItem (item )
+            elif self ._tool ==Tool .ELLIPSE :
+                item =QGraphicsEllipseItem (rect )
+                item .setPen (self ._pen ())
+                item .setBrush (QBrush (Qt .BrushStyle .NoBrush ))
+                self ._current_item =item
+                self ._scene .addItem (item )
 
-        elif self ._tool ==Tool .LINE :
-            item =QGraphicsLineItem (line )
-            item .setPen (self ._pen ())
-            self ._current_item =item
-            self ._scene .addItem (item )
+            elif self ._tool ==Tool .LINE :
+                item =QGraphicsLineItem (line )
+                item .setPen (self ._pen ())
+                self ._current_item =item
+                self ._scene .addItem (item )
 
-        elif self ._tool ==Tool .ARROW :
-            item =ArrowItem (line ,self ._pen ())
-            self ._current_item =item
-            self ._scene .addItem (item )
+            elif self ._tool ==Tool .ARROW :
+                item =ArrowItem (line ,self ._pen ())
+                self ._current_item =item
+                self ._scene .addItem (item )
 
-        elif self ._tool ==Tool .BLUR :
-            item =BlurItem (rect ,self ._source_pixmap ,self ._blur_radius )
-            self ._current_item =item
-            self ._scene .addItem (item )
+            elif self ._tool ==Tool .BLUR :
+                item =BlurItem (rect ,self ._source_pixmap ,self ._blur_radius )
+                self ._current_item =item
+                self ._scene .addItem (item )
 
-        elif self ._tool ==Tool .HIGHLIGHT :
-            item =HighlightItem (rect ,self ._color ,self ._highlight_opacity )
-            self ._current_item =item
-            self ._scene .addItem (item )
+            elif self ._tool ==Tool .HIGHLIGHT :
+                item =HighlightItem (rect ,self ._color ,self ._highlight_opacity )
+                self ._current_item =item
+                self ._scene .addItem (item )
 
-        elif self ._tool ==Tool .CROP :
-            if self ._crop_item and self ._crop_item .scene ():
-                self ._scene .removeItem (self ._crop_item )
-            self ._crop_item =QGraphicsRectItem (rect )
-            self ._crop_item .setPen (QPen (QColor (0 ,120 ,215 ),2 ,Qt .PenStyle .DashLine ))
-            self ._crop_item .setBrush (QBrush (QColor (0 ,120 ,215 ,30 )))
-            self ._scene .addItem (self ._crop_item )
+            elif self ._tool ==Tool .CROP :
+                if self ._crop_item and self ._crop_item .scene ():
+                    self ._scene .removeItem (self ._crop_item )
+                self ._crop_item =QGraphicsRectItem (rect )
+                self ._crop_item .setPen (QPen (QColor (0 ,120 ,215 ),2 ,Qt .PenStyle .DashLine ))
+                self ._crop_item .setBrush (QBrush (QColor (0 ,120 ,215 ,30 )))
+                self ._scene .addItem (self ._crop_item )
+                self ._current_item =None
+        except Exception :
+            self ._drawing =False
             self ._current_item =None
+            logger .exception ("Editor mouseMoveEvent crashed (tool=%s)",self ._tool )
 
     def mouseReleaseEvent (self ,event ):
-        if event .button ()!=Qt .MouseButton .LeftButton :
-            return super ().mouseReleaseEvent (event )
+        try :
+            if event .button ()!=Qt .MouseButton .LeftButton :
+                return super ().mouseReleaseEvent (event )
 
-        if not self ._drawing :
-            return super ().mouseReleaseEvent (event )
+            if not self ._drawing :
+                return super ().mouseReleaseEvent (event )
 
-        self ._drawing =False
+            self ._drawing =False
 
-        if self ._tool ==Tool .SELECT :
-            super ().mouseReleaseEvent (event )
-            return
+            if self ._tool ==Tool .SELECT :
+                super ().mouseReleaseEvent (event )
+                return
 
-        if self ._tool ==Tool .FREEHAND and self ._current_item :
-            self ._scene .removeItem (self ._current_item )
-            self ._undo_stack .push (self ._current_item )
-            self ._current_item =None
-            self ._freehand_path =None
-            return
-
-        if self ._tool ==Tool .CROP :
-            pos =self .mapToScene (event .pos ())
-            self ._crop_rect =QRectF (self ._start_pos ,pos ).normalized ()
-            return
-
-        if self ._current_item :
-            if self ._current_item .scene ():
+            if self ._tool ==Tool .FREEHAND and self ._current_item :
                 self ._scene .removeItem (self ._current_item )
-            self ._undo_stack .push (self ._current_item )
+                self ._undo_stack .push (self ._current_item )
+                self ._current_item =None
+                self ._freehand_path =None
+                return
+
+            if self ._tool ==Tool .CROP :
+                pos =self .mapToScene (event .pos ())
+                self ._crop_rect =QRectF (self ._start_pos ,pos ).normalized ()
+                return
+
+            if self ._current_item :
+                try :
+                    if self ._current_item .scene ():
+                        self ._scene .removeItem (self ._current_item )
+                except RuntimeError :
+                    self ._current_item =None
+                    return
+                self ._undo_stack .push (self ._current_item )
+                self ._current_item =None
+        except Exception :
+            self ._drawing =False
             self ._current_item =None
+            logger .exception ("Editor mouseReleaseEvent crashed (tool=%s)",self ._tool )
 
     def wheelEvent (self ,event ):
         if event .modifiers ()&Qt .KeyboardModifier .ControlModifier :
             factor =1.15 if event .angleDelta ().y ()>0 else 1 /1.15
+            self ._user_zoomed =True
             self .scale (factor ,factor )
         else :
             super ().wheelEvent (event )
+
+    def showEvent (self ,event ):
+        super ().showEvent (event )
+        if self ._initial_fit_pending :
+            self ._fit_to_view ()
+            self ._initial_fit_pending =False
+
+    def resizeEvent (self ,event ):
+        super ().resizeEvent (event )
+        if self ._bg_item and (self ._initial_fit_pending or not self ._user_zoomed ):
+            self ._fit_to_view ()
+            self ._initial_fit_pending =False
 
     def undo (self ):
         self ._undo_stack .undo ()
@@ -467,7 +513,9 @@ class EditorCanvas (QGraphicsView ):
         self ._scene .addItem (self ._bg_item )
         self ._undo_stack =UndoStack (self ._scene )
         StepMarkerItem .reset_counter ()
-        self .fitInView (self ._bg_item ,Qt .AspectRatioMode .KeepAspectRatio )
+        self ._user_zoomed =False
+        self ._initial_fit_pending =True
+        self ._fit_to_view ()
 
     def render_to_pixmap (self )->QPixmap :
         rect =self ._scene .sceneRect ()
@@ -480,9 +528,25 @@ class EditorCanvas (QGraphicsView ):
         painter .end ()
         return pixmap
 
-    def reset_zoom (self ):
+    def _fit_to_view (self ):
+        if not self ._bg_item :
+            return
         self .resetTransform ()
         self .fitInView (self ._bg_item ,Qt .AspectRatioMode .KeepAspectRatio )
+
+        # If the image is still rendered too small after fit-to-view, gently zoom in
+        # once so opened screenshots are readable without immediate manual zooming.
+        viewport =self .viewport ().size ()
+        image_rect =self .transform ().mapRect (self ._bg_item .boundingRect ())
+        if viewport .width ()>0 and image_rect .width ()<viewport .width ()*0.55 :
+            factor =(viewport .width ()*0.72 )/max (1.0 ,image_rect .width ())
+            factor =max (1.0 ,min (factor ,2.0 ))
+            if factor >1.02 :
+                self .scale (factor ,factor )
+
+    def reset_zoom (self ):
+        self ._user_zoomed =False
+        self ._fit_to_view ()
 
 class AnnotationEditor (QMainWindow ):
 
@@ -507,6 +571,7 @@ class AnnotationEditor (QMainWindow ):
         self ._build_toolbar ()
         self ._build_statusbar ()
         self ._setup_shortcuts ()
+        self ._apply_theme ()
 
         self .showMaximized ()
 
@@ -629,6 +694,59 @@ class AnnotationEditor (QMainWindow ):
         self ._status =QStatusBar (self )
         self .setStatusBar (self ._status )
         self ._status .showMessage ("Ready — select a tool and start drawing")
+
+    def _apply_theme (self ):
+        self .setStyleSheet ("""
+            QMainWindow, QWidget {
+                background-color: #090d12;
+                color: #e4ebf5;
+            }
+            QToolBar {
+                background-color: #0f141b;
+                border: none;
+                border-bottom: 1px solid #18202a;
+                spacing: 6px;
+                padding: 8px;
+            }
+            QToolButton, QPushButton {
+                background-color: #121922;
+                color: #edf3fb;
+                border: 1px solid #202a36;
+                border-radius: 10px;
+                padding: 8px 12px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QToolButton:hover, QPushButton:hover {
+                background-color: #17202a;
+                border-color: #334154;
+            }
+            QToolButton:checked {
+                background-color: #eef2f7;
+                color: #090d12;
+                border-color: #ffffff;
+            }
+            QLabel {
+                color: #a8b5c6;
+            }
+            QSpinBox {
+                background-color: #0c1117;
+                color: #eef3f9;
+                border: 1px solid #202a36;
+                border-radius: 8px;
+                padding: 6px 8px;
+                min-width: 56px;
+            }
+            QStatusBar {
+                background-color: #080c11;
+                color: #718195;
+                border-top: 1px solid #131922;
+            }
+            QGraphicsView {
+                background-color: #090d12;
+                border: none;
+            }
+        """)
 
     def _setup_shortcuts (self ):
         pass

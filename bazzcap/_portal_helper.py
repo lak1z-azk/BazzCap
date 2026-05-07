@@ -3,6 +3,48 @@
 import sys
 import os
 import signal
+import shutil
+import tempfile
+
+
+def _shared_temp_dir() -> str:
+    """Return a temp directory visible from both host and Flatpak sandboxes.
+
+    /tmp is sandboxed inside Flatpak, so files created on the host are
+    invisible to the app.  Use ~/.config/bazzcap/ which lives on the shared
+    home filesystem.
+    """
+    d = os.path.join(os.path.expanduser("~"), ".config", "bazzcap")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _stage_portal_capture(path: str) -> str | None:
+    """Move the portal-created screenshot into a temporary file.
+
+    Some portals persist captures into the user's screenshots folder before
+    returning the path. BazzCap only needs the pixels, so we stage them in a
+    temp file and remove the portal artifact to avoid duplicate saved images.
+    """
+    if not path or not os.path.isfile(path):
+        return None
+
+    fd, tmp_path = tempfile.mkstemp(prefix="bazzcap_portal_", suffix=".png",
+                                    dir=_shared_temp_dir())
+    os.close(fd)
+    try:
+        shutil.copy2(path, tmp_path)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return tmp_path
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return None
 
 
 def screenshot(interactive=True):
@@ -52,14 +94,15 @@ def screenshot(interactive=True):
 
         iface.Screenshot("", options)
 
-        GLib.timeout_add_seconds(60, loop.quit)
+        GLib.timeout_add_seconds(15, loop.quit)
         loop.run()
 
     except dbus.exceptions.DBusException:
         sys.exit(1)
 
-    if result_path[0] and os.path.isfile(result_path[0]):
-        print(result_path[0])
+    staged_path = _stage_portal_capture(result_path[0])
+    if staged_path:
+        print(staged_path)
         sys.exit(0)
     else:
         sys.exit(1)
@@ -67,7 +110,7 @@ def screenshot(interactive=True):
 
 if __name__ == "__main__":
     signal.signal(signal.SIGALRM, lambda *_: sys.exit(1))
-    signal.alarm(65)
+    signal.alarm(20)
 
     if len(sys.argv) < 2:
         print("Usage: _portal_helper.py screenshot [options]", file=sys.stderr)

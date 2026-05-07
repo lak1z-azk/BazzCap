@@ -17,6 +17,8 @@ import math
 import shutil
 import tempfile
 
+from bazzcap.runtime import external_command_env, iter_python_commands, packaged_script_path
+
 from PyQt6.QtWidgets import (
     QWidget, QApplication, QLabel, QPushButton,
     QHBoxLayout, QVBoxLayout, QColorDialog, QInputDialog,
@@ -515,7 +517,7 @@ class RegionCaptureOverlay(QWidget):
     PHASE_ANNOTATE = "annotate"
 
     def __init__(self, screenshot: QPixmap, mode: str = "region",
-                 parent=None, screen=None):
+                 parent=None, screen=None, show_magnifier: bool = True):
         super().__init__(parent)
         self._mode = mode
         self._active = True
@@ -558,6 +560,7 @@ class RegionCaptureOverlay(QWidget):
         self._hovered_ann_idx = -1
 
         self._mouse_pos = QPoint()
+        self._show_magnifier = show_magnifier
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -577,10 +580,10 @@ class RegionCaptureOverlay(QWidget):
         self._toolbar.confirm_requested.connect(self._confirm)
         self._toolbar.cancel_requested.connect(self._cancel)
 
-        tw = self._toolbar.sizeHint().width()
-        self._toolbar.move((screen_geo.width() - tw) // 2, 6)
         self._toolbar.show()
         self._toolbar.raise_()
+        self._screen_width = screen_geo.width()
+        QTimer.singleShot(0, self._reposition_toolbar)
 
         self.setMouseTracking(True)
 
@@ -595,6 +598,11 @@ class RegionCaptureOverlay(QWidget):
         p.fillRect(dimmed.rect(), QColor(0, 0, 0, 100))
         p.end()
         return dimmed
+
+    def _reposition_toolbar(self):
+        tw = self._toolbar.sizeHint().width()
+        self._toolbar.move((self._screen_width - tw) // 2, 6)
+        self._toolbar.raise_()
 
     # ── Tool / color callbacks ──
 
@@ -992,9 +1000,10 @@ class RegionCaptureOverlay(QWidget):
             self.update()
 
         elif self._phase == self.PHASE_SELECT and not self._selecting:
-            self._magnifier.update_position(event.pos())
-            if not self._magnifier.isVisible():
-                self._magnifier.show()
+            if self._show_magnifier:
+                self._magnifier.update_position(event.pos())
+                if not self._magnifier.isVisible():
+                    self._magnifier.show()
             self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
@@ -1021,8 +1030,14 @@ class RegionCaptureOverlay(QWidget):
                 return
 
             self._has_selection = True
-            # Region selected → finish immediately (annotations included)
-            self._finish_capture()
+            if self._tool == Tool.NONE:
+                # No annotation tool active → finish immediately
+                self._finish_capture()
+            else:
+                # Annotation tool active → enter annotate phase on the selection
+                self._phase = self.PHASE_ANNOTATE
+                self._magnifier.hide()
+                self.update()
 
         elif self._drawing:
             # Commit annotation (works in both PHASE_SELECT and PHASE_ANNOTATE)
@@ -1277,13 +1292,16 @@ def _is_flatpak() -> bool:
     )
 
 
-def grab_screenshot_via_portal() -> QPixmap | None:
+def grab_screenshot_via_portal(*, allow_screen_grab: bool = True) -> QPixmap | None:
     """Take a fullscreen screenshot.
 
     On macOS, uses screencapture. On Linux, tries XDG Desktop Portal first,
     then CLI tools, then QScreen.grabWindow as fallback.
     Handles Flatpak sandboxes by using flatpak-spawn --host.
     Returns a QPixmap of the entire screen, or None on failure.
+
+    Set *allow_screen_grab* to ``False`` when calling from a non-GUI thread
+    (QScreen.grabWindow is not thread-safe).
     """
     import sys as _sys
     if _sys.platform == "darwin":
@@ -1294,6 +1312,7 @@ def grab_screenshot_via_portal() -> QPixmap | None:
             subprocess.run(
                 ["screencapture", "-x", tmp.name],
                 capture_output=True, timeout=10, check=True,
+                env=external_command_env(),
             )
             pixmap = QPixmap(tmp.name)
             if not pixmap.isNull():
@@ -1327,37 +1346,19 @@ def grab_screenshot_via_portal() -> QPixmap | None:
                 return pixmap
         return None
 
-    helper = os.path.join(os.path.dirname(__file__), "_portal_helper.py")
+    helper = packaged_script_path("_portal_helper.py")
     in_flatpak = _is_flatpak()
+    # Use a shared directory for temp files so host tools can write and
+    # the Flatpak sandbox can read the result (/tmp is sandboxed).
+    _shared_dir = None
+    if in_flatpak:
+        _shared_dir = os.path.join(os.path.expanduser("~"), ".config", "bazzcap")
+        os.makedirs(_shared_dir, exist_ok=True)
 
-    # Strategy 1: Portal helper via host Python
-    if os.path.exists(helper):
-        for attempt_host in ([True, False] if in_flatpak else [False, True]):
-            try:
-                if attempt_host and shutil.which("flatpak-spawn"):
-                    cmd = ["flatpak-spawn", "--host", "python3",
-                           helper, "screenshot", "--fullscreen"]
-                else:
-                    import sys
-                    cmd = [sys.executable, helper, "screenshot", "--fullscreen"]
-
-                r = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=30,
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    path = r.stdout.strip()
-                    if os.path.isfile(path):
-                        pixmap = QPixmap(path)
-                        if not pixmap.isNull():
-                            return pixmap
-            except (subprocess.SubprocessError, OSError):
-                continue
-
-    # Strategy 2: CLI tools
+    # Strategy 1: CLI tools (grim first — silent capture, no screen flash)
     tool_commands = []
     for tool, args_fn in [
         ("grim", lambda tmp: ["grim", tmp]),
-        ("gnome-screenshot", lambda tmp: ["gnome-screenshot", "-f", tmp]),
         ("scrot", lambda tmp: ["scrot", tmp]),
     ]:
         if shutil.which(tool):
@@ -1366,13 +1367,14 @@ def grab_screenshot_via_portal() -> QPixmap | None:
             tool_commands.append((True, tool, args_fn))
 
     for use_host, tool, args_fn in tool_commands:
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False,
+                                          dir=_shared_dir)
         tmp.close()
         try:
             cmd = args_fn(tmp.name)
             if use_host and shutil.which("flatpak-spawn"):
                 cmd = ["flatpak-spawn", "--host"] + cmd
-            subprocess.run(cmd, capture_output=True, timeout=10, check=True)
+            subprocess.run(cmd, capture_output=True, timeout=10, check=True, env=external_command_env())
             pixmap = QPixmap(tmp.name)
             if not pixmap.isNull():
                 return pixmap
@@ -1384,11 +1386,36 @@ def grab_screenshot_via_portal() -> QPixmap | None:
             except OSError:
                 pass
 
-    # Strategy 3: QScreen grab (X11 only)
-    screen = QGuiApplication.primaryScreen()
-    if screen:
-        pixmap = screen.grabWindow(0)
-        if not pixmap.isNull():
-            return pixmap
+    # Strategy 2: Portal helper via host/system Python (may flash screen)
+    if os.path.isfile(helper):
+        for python_cmd in iter_python_commands(prefer_host=in_flatpak):
+            try:
+                cmd = python_cmd + [helper, "screenshot", "--fullscreen"]
+                r = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=15,
+                    env=external_command_env(),
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    path = r.stdout.strip()
+                    if os.path.isfile(path):
+                        try:
+                            pixmap = QPixmap(path)
+                            if not pixmap.isNull():
+                                return pixmap
+                        finally:
+                            try:
+                                os.unlink(path)
+                            except OSError:
+                                pass
+            except (subprocess.SubprocessError, OSError):
+                continue
+
+    # Strategy 3: QScreen grab (X11 only, main thread only)
+    if allow_screen_grab:
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            pixmap = screen.grabWindow(0)
+            if not pixmap.isNull():
+                return pixmap
 
     return None

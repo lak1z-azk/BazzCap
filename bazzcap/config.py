@@ -13,7 +13,7 @@ if IS_MACOS:
     _DEFAULT_HOTKEYS = {
         "capture_fullscreen": "<Super><Shift>1",
         "capture_region": "<Super><Shift>2",
-        "capture_window": "<Super><Shift>w",
+        "capture_window": "<Super><Shift>6",
     }
     _CONFIG_DIR = os.path.expanduser("~/Library/Application Support/bazzcap")
 else:
@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
         "blur_radius": 15,
         "highlight_opacity": 0.35,
     },
+    "show_magnifier": True,
     "minimize_to_tray": True,
     "start_minimized": True,
     "start_with_system": True,

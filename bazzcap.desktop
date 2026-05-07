@@ -2,7 +2,7 @@
 Name=BazzCap
 Comment=Screenshot & Recording Tool for Linux
 Exec=python3 -m bazzcap
-Icon=camera-photo
+Icon=bazzcap
 Terminal=false
 Type=Application
 Categories=Utility;Graphics;
