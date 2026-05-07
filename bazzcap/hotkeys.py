@@ -16,6 +16,8 @@ import threading
 import shutil
 import time
 
+from bazzcap.runtime import external_command_env, packaged_script_path
+
 IS_MACOS = sys.platform == "darwin"
 
 # Socket path in user's home dir — shared between Flatpak and host
@@ -38,27 +40,11 @@ if IS_MACOS:
         'p': 0x23, 'q': 0x0C, 'r': 0x0F, 's': 0x01, 't': 0x11,
         'u': 0x20, 'v': 0x09, 'w': 0x0D, 'x': 0x07, 'y': 0x10,
         'z': 0x06,
-        # Symbols and punctuation (kVK_ANSI_* from Events.h)
-        '-': 0x1B, '=': 0x18, '[': 0x21, ']': 0x1E,
-        ';': 0x29, "'": 0x27, ',': 0x2B, '.': 0x2F,
-        '/': 0x2C, '\\': 0x2A, '`': 0x32,
-    }
-
-    # Multi-character key names → VK codes (from hotkey_settings.py names)
-    _MACOS_VK_NAMED = {
-        'minus': 0x1B, 'equal': 0x18,
-        'bracketleft': 0x21, 'bracketright': 0x1E,
-        'semicolon': 0x29, 'apostrophe': 0x27,
-        'comma': 0x2B, 'period': 0x2F,
-        'slash': 0x2C, 'backslash': 0x2A, 'grave': 0x32,
     }
 
 
 class HotkeyManager:
     """Register and manage global hotkeys."""
-
-    # Signal-like callback for GUI notifications (set by BazzCapApp)
-    accessibility_missing = None  # callable or None
 
     def __init__(self):
         self._listeners = {}     # hotkey_name -> callback
@@ -224,13 +210,19 @@ class HotkeyManager:
         except ImportError:
             pass
 
-        # Auto-install pynput (needed for global hotkeys)
+        if not IS_MACOS:
+            print("[BazzCap] pynput not available — skipping fallback hotkey backend",
+                  flush=True)
+            return None
+
+        # Auto-install pynput on macOS where it is the primary backend
         print("[BazzCap] pynput not found — installing automatically...",
               flush=True)
         try:
             subprocess.check_call(
                 [sys.executable, "-m", "pip", "install", "--quiet", "pynput"],
                 timeout=60,
+                env=external_command_env(),
             )
             from pynput import keyboard
             print("[BazzCap] ✓ pynput installed successfully", flush=True)
@@ -277,7 +269,6 @@ class HotkeyManager:
         print("[BazzCap] Starting macOS hotkey listener...", flush=True)
 
         # Check accessibility permission
-        self._mac_accessibility_ok = True
         try:
             from ApplicationServices import AXIsProcessTrusted
             trusted = AXIsProcessTrusted()
@@ -285,7 +276,6 @@ class HotkeyManager:
                 print("[BazzCap] ✓ Accessibility permission granted",
                       flush=True)
             else:
-                self._mac_accessibility_ok = False
                 print(
                     "[BazzCap] ⚠ Accessibility permission NOT granted!\n"
                     "  Global hotkeys WILL NOT WORK without this.\n"
@@ -295,12 +285,6 @@ class HotkeyManager:
                     "from terminal).",
                     flush=True,
                 )
-                # Notify GUI so the user sees a dialog (not just stdout)
-                if self.accessibility_missing:
-                    try:
-                        self.accessibility_missing()
-                    except Exception:
-                        pass
         except ImportError:
             print("[BazzCap] (could not check Accessibility — "
                   "ApplicationServices unavailable)", flush=True)
@@ -308,19 +292,6 @@ class HotkeyManager:
         self._kb = kb
         self._mac_combos = []   # [(frozenset, target, is_vk, callback)]
         self._mac_pressed = set()  # canonical modifier names currently held
-
-        # Use Quartz for reliable modifier detection — pynput's modifier
-        # press/release tracking via kCGEventFlagsChanged is unreliable
-        # on some macOS versions and pynput builds.
-        try:
-            import Quartz
-            self._quartz = Quartz
-            print("[BazzCap] ✓ Using Quartz for modifier detection",
-                  flush=True)
-        except ImportError:
-            self._quartz = None
-            print("[BazzCap] Quartz unavailable, using pynput modifier "
-                  "tracking (may be unreliable)", flush=True)
 
         self._rebuild_mac_combos()
 
@@ -330,17 +301,9 @@ class HotkeyManager:
             mod = self._canonical_mod(key)
             if mod:
                 self._mac_pressed.add(mod)
-
-            # Query actual modifier state from macOS (reliable) or
-            # fall back to manually tracked set
-            if self._quartz:
-                current_mods = self._get_current_mods_quartz()
-            else:
-                current_mods = self._mac_pressed
-
             # Check all registered combos
             for req_mods, target, is_vk, cb in self._mac_combos:
-                if not req_mods.issubset(current_mods):
+                if not req_mods.issubset(self._mac_pressed):
                     continue
                 if self._mac_key_matches(key, target, is_vk):
                     try:
@@ -377,11 +340,6 @@ class HotkeyManager:
                 "  then RESTART BazzCap.",
                 flush=True,
             )
-            if self.accessibility_missing:
-                try:
-                    self.accessibility_missing()
-                except Exception:
-                    pass
 
     def _rebuild_mac_combos(self):
         """(Re)build the parsed macOS hotkey combo list from _bindings."""
@@ -394,9 +352,6 @@ class HotkeyManager:
             if parsed:
                 mods, target, is_vk = parsed
                 self._mac_combos.append((mods, target, is_vk, callback))
-            else:
-                print(f"[BazzCap] ⚠ Hotkey '{name}' ({combo}) was NOT "
-                      f"registered — could not parse combo", flush=True)
 
     def _parse_macos_combo(self, combo_str):
         """Parse '<super><shift>1' → (frozenset({'cmd','shift'}), 0x12, True)."""
@@ -405,8 +360,8 @@ class HotkeyManager:
         mod_map = {
             '<ctrl>': 'ctrl', '<control>': 'ctrl',
             '<shift>': 'shift',
-            '<alt>': 'alt', '<option>': 'alt',
-            '<super>': 'cmd', '<meta>': 'cmd', '<cmd>': 'cmd',
+            '<alt>': 'alt',
+            '<super>': 'cmd', '<meta>': 'cmd',
         }
 
         mods = set()
@@ -428,25 +383,10 @@ class HotkeyManager:
             ('enter', ['enter', 'return']),
             ('esc', ['escape', 'esc']),
             ('delete', ['delete']), ('backspace', ['backspace']),
-            ('print_screen', ['print', 'printscreen', 'print_screen']),
             ('f1', ['f1']), ('f2', ['f2']), ('f3', ['f3']),
             ('f4', ['f4']), ('f5', ['f5']), ('f6', ['f6']),
             ('f7', ['f7']), ('f8', ['f8']), ('f9', ['f9']),
             ('f10', ['f10']), ('f11', ['f11']), ('f12', ['f12']),
-            # Navigation keys
-            ('home', ['home']), ('end', ['end']),
-            ('page_up', ['page_up', 'pageup']),
-            ('page_down', ['page_down', 'pagedown']),
-            ('insert', ['insert']),
-            # Arrow keys
-            ('up', ['up']), ('down', ['down']),
-            ('left', ['left']), ('right', ['right']),
-            # Misc
-            ('pause', ['pause']),
-            ('scroll_lock', ['scroll_lock', 'scrolllock']),
-            ('caps_lock', ['caps_lock', 'capslock']),
-            ('num_lock', ['num_lock', 'numlock']),
-            ('menu', ['menu']),
         ]:
             key_obj = getattr(kb.Key, attr, None)
             if key_obj is not None:
@@ -462,13 +402,6 @@ class HotkeyManager:
             if vk is not None:
                 return (frozenset(mods), vk, True)
 
-        # Multi-character named keys (e.g. 'minus', 'comma' from hotkey_settings)
-        vk = _MACOS_VK_NAMED.get(remaining)
-        if vk is not None:
-            return (frozenset(mods), vk, True)
-
-        print(f"[BazzCap] ⚠ Could not parse macOS hotkey: '{combo_str}' "
-              f"(unrecognized key: '{remaining}')", flush=True)
         return None
 
     def _mac_key_matches(self, pressed, target, is_vk):
@@ -501,28 +434,6 @@ class HotkeyManager:
                     if k is not None:
                         self._mod_lookup[k] = name
         return self._mod_lookup.get(key)
-
-    def _get_current_mods_quartz(self):
-        """Query macOS for currently held modifier keys via Quartz.
-
-        This is more reliable than tracking individual pynput modifier
-        press/release events, which can miss events on some macOS
-        versions due to kCGEventFlagsChanged handling quirks.
-        """
-        Q = self._quartz
-        flags = Q.CGEventSourceFlagsState(
-            Q.kCGEventSourceStateCombinedSessionState
-        )
-        mods = set()
-        if flags & Q.kCGEventFlagMaskCommand:
-            mods.add('cmd')
-        if flags & Q.kCGEventFlagMaskShift:
-            mods.add('shift')
-        if flags & Q.kCGEventFlagMaskControl:
-            mods.add('ctrl')
-        if flags & Q.kCGEventFlagMaskAlternate:
-            mods.add('alt')
-        return mods
 
     @staticmethod
     def _to_pynput_combo(combo: str) -> str | None:
@@ -586,7 +497,7 @@ class HotkeyManager:
                 cmd = ["flatpak-spawn", "--host", "gsettings"] + list(args)
             else:
                 cmd = ["gsettings"] + list(args)
-            return subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=external_command_env())
         return gs
 
     def _unregister_desktop_shortcuts(self):
@@ -703,9 +614,7 @@ class HotkeyManager:
 
             # Copy the trigger script to ~/.local/share/bazzcap/ (no spaces)
             # so GNOME Shell can parse the command correctly.
-            src_trigger = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "_trigger.py"
-            )
+            src_trigger = packaged_script_path("_trigger.py")
             dst_trigger = os.path.join(SOCKET_DIR, "_trigger.py")
             try:
                 import shutil as _shutil
@@ -837,9 +746,7 @@ class HotkeyManager:
         os.makedirs(apps_dir, exist_ok=True)
 
         # Copy the trigger script
-        src_trigger = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "_trigger.py"
-        )
+        src_trigger = packaged_script_path("_trigger.py")
         dst_trigger = os.path.join(SOCKET_DIR, "_trigger.py")
         try:
             import shutil as _shutil
@@ -892,6 +799,7 @@ class HotkeyManager:
                          "/kglobalaccel",
                          "org.kde.KGlobalAccel.blockGlobalShortcuts", "false"],
                         capture_output=True, timeout=5,
+                        env=external_command_env(),
                     )
 
                 # Also write to kglobalshortcutsrc as fallback
@@ -908,6 +816,7 @@ class HotkeyManager:
                          "--group", f"{desktop_id}.desktop",
                          "--key", "_launch", shortcut_val],
                         capture_output=True, timeout=5,
+                        env=external_command_env(),
                     )
             except (subprocess.SubprocessError, OSError):
                 pass
@@ -919,6 +828,7 @@ class HotkeyManager:
                  "/kglobalaccel", "org.kde.KGlobalAccel.yourShortcutsChanged",
                  "array:string:"],
                 capture_output=True, timeout=5,
+                env=external_command_env(),
             )
         except (subprocess.SubprocessError, OSError):
             pass
@@ -950,6 +860,7 @@ class HotkeyManager:
                          "--group", f"{desktop_id}.desktop",
                          "--key", "_launch", "--delete"],
                         capture_output=True, timeout=5,
+                        env=external_command_env(),
                     )
                 except (subprocess.SubprocessError, OSError):
                     pass

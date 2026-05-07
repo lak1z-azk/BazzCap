@@ -1,31 +1,8 @@
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-*.egg-info/
-dist/
-build/
-*.egg
-
-# Virtual environments
 .venv/
 .venv-host/
-venv/
-env/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# BazzCap runtime
-*.sock
-*.log
-nohup.out
+build/
+dist/
+release/
+*.spec
