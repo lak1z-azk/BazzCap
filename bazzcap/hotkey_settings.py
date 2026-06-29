@@ -271,6 +271,37 @@ class HotkeySettingsDialog(QDialog):
         capture_group.setLayout(capture_form)
         layout.addWidget(capture_group)
 
+        clipboard_group = QGroupBox("Clipboard-Only (no file saved)")
+        clipboard_form = QFormLayout()
+
+        self._hk_fullscreen_clipboard = HotkeyEdit(
+            hotkeys.get("capture_fullscreen_clipboard",
+                        "<Super><Shift>3" if IS_MACOS else "<Shift>Print"))
+        clipboard_form.addRow("Fullscreen → Clipboard:", self._hk_fullscreen_clipboard)
+
+        self._hk_region_clipboard = HotkeyEdit(
+            hotkeys.get("capture_region_clipboard",
+                        "<Super><Shift>4" if IS_MACOS else "<Ctrl><Shift>Print"))
+        clipboard_form.addRow("Region → Clipboard:", self._hk_region_clipboard)
+
+        clipboard_group.setLayout(clipboard_form)
+        layout.addWidget(clipboard_group)
+
+        ocr_group = QGroupBox("OCR — Copy Text from Screen")
+        ocr_form = QFormLayout()
+
+        self._hk_ocr = HotkeyEdit(
+            hotkeys.get("capture_ocr",
+                        "<Super><Shift>5" if IS_MACOS else "<Super>Print"))
+        ocr_form.addRow("OCR Region:", self._hk_ocr)
+
+        ocr_note = QLabel("Requires tesseract  ·  sudo dnf install tesseract")
+        ocr_note.setStyleSheet("color: #888; font-size: 10px;")
+        ocr_form.addRow(ocr_note)
+
+        ocr_group.setLayout(ocr_form)
+        layout.addWidget(ocr_group)
+
         reset_btn = QPushButton("Reset to Defaults")
         reset_btn.setStyleSheet("color: #f88; padding: 6px;")
         reset_btn.clicked.connect(self._reset_defaults)
@@ -288,6 +319,11 @@ class HotkeySettingsDialog(QDialog):
         self._config.set("hotkeys.capture_fullscreen", self._hk_fullscreen.hotkey)
         self._config.set("hotkeys.capture_region", self._hk_region.hotkey)
         self._config.set("hotkeys.capture_window", self._hk_window.hotkey)
+        self._config.set("hotkeys.capture_fullscreen_clipboard",
+                         self._hk_fullscreen_clipboard.hotkey)
+        self._config.set("hotkeys.capture_region_clipboard",
+                         self._hk_region_clipboard.hotkey)
+        self._config.set("hotkeys.capture_ocr", self._hk_ocr.hotkey)
         self._config.save()
         self.accept()
 
@@ -297,19 +333,28 @@ class HotkeySettingsDialog(QDialog):
                 "fullscreen": "<Super><Shift>1",
                 "region": "<Super><Shift>2",
                 "window": "<Super><Shift>6",
+                "fullscreen_clipboard": "<Super><Shift>3",
+                "region_clipboard": "<Super><Shift>4",
+                "ocr": "<Super><Shift>5",
             }
         else:
             defaults = {
                 "fullscreen": "Print",
                 "region": "<Ctrl>Print",
                 "window": "<Alt>Print",
+                "fullscreen_clipboard": "<Shift>Print",
+                "region_clipboard": "<Ctrl><Shift>Print",
+                "ocr": "<Super>Print",
             }
 
-        self._hk_fullscreen._hotkey = defaults["fullscreen"]
-        self._hk_fullscreen.setText(HotkeyEdit._format_display(defaults["fullscreen"]))
-
-        self._hk_region._hotkey = defaults["region"]
-        self._hk_region.setText(HotkeyEdit._format_display(defaults["region"]))
-
-        self._hk_window._hotkey = defaults["window"]
-        self._hk_window.setText(HotkeyEdit._format_display(defaults["window"]))
+        for attr, key in [
+            ("_hk_fullscreen", "fullscreen"),
+            ("_hk_region", "region"),
+            ("_hk_window", "window"),
+            ("_hk_fullscreen_clipboard", "fullscreen_clipboard"),
+            ("_hk_region_clipboard", "region_clipboard"),
+            ("_hk_ocr", "ocr"),
+        ]:
+            widget = getattr(self, attr)
+            widget._hotkey = defaults[key]
+            widget.setText(HotkeyEdit._format_display(defaults[key]))

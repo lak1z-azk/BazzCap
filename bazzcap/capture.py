@@ -5,7 +5,7 @@ import sys
 import time
 from enum import Enum, auto
 
-from bazzcap.runtime import external_command_env, iter_python_commands, packaged_script_path
+from bazzcap.runtime import external_command_env, is_flatpak, iter_python_commands, packaged_script_path
 
 IS_MACOS = sys.platform == "darwin"
 
@@ -34,14 +34,6 @@ def _run(cmd: list[str], timeout: int = 30) -> tuple[bool, str]:
         return False, ""
 
 
-def _is_flatpak() -> bool:
-    return (
-        os.path.isfile("/.flatpak-info")
-        or "FLATPAK_ID" in os.environ
-        or os.environ.get("container") == "flatpak"
-        or any(part.startswith("/app/") for part in os.environ.get("PATH", "").split(":"))
-    )
-
 
 def _portal_screenshot(interactive: bool = True) -> str | None:
     helper = packaged_script_path("_portal_helper.py")
@@ -51,7 +43,7 @@ def _portal_screenshot(interactive: bool = True) -> str | None:
             "screenshot",
             "--interactive" if interactive else "--fullscreen",
         ]
-        for python_cmd in iter_python_commands(prefer_host=_is_flatpak()):
+        for python_cmd in iter_python_commands(prefer_host=is_flatpak()):
             try:
                 result = subprocess.run(
                     python_cmd + helper_args,
@@ -105,7 +97,7 @@ def capture_fullscreen(output_path: str) -> bool:
         ok, _ = _run(["grim", output_path])
         if ok and os.path.isfile(output_path):
             return True
-    elif _is_flatpak():
+    elif is_flatpak():
         ok, _ = _run(["flatpak-spawn", "--host", "grim", output_path])
         if ok and os.path.isfile(output_path):
             return True

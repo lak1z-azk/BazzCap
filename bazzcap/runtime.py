@@ -17,6 +17,15 @@ _FROZEN_ENV_KEYS = {
 }
 
 
+def is_flatpak() -> bool:
+    return (
+        os.path.isfile("/.flatpak-info")
+        or "FLATPAK_ID" in os.environ
+        or os.environ.get("container") == "flatpak"
+        or any(p.startswith("/app/") for p in os.environ.get("PATH", "").split(":"))
+    )
+
+
 def is_frozen_bundle() -> bool:
     return bool(getattr(sys, "frozen", False))
 
