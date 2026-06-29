@@ -16,7 +16,7 @@ import threading
 import shutil
 import time
 
-from bazzcap.runtime import external_command_env, packaged_script_path
+from bazzcap.runtime import external_command_env, is_flatpak, packaged_script_path
 
 IS_MACOS = sys.platform == "darwin"
 
@@ -76,8 +76,8 @@ class HotkeyManager:
         for name, combo in new_bindings.items():
             if combo and name in self._listeners:
                 self._bindings[combo.lower()] = name
-        # Re-register desktop shortcuts with new bindings
-        self._register_desktop_shortcuts()
+        # Re-register desktop shortcuts with new bindings (notify on KDE)
+        self._register_desktop_shortcuts(notify_kde_relogin=True)
         # Rebuild macOS combo list; start listener if it wasn't running
         if IS_MACOS:
             if hasattr(self, '_mac_combos'):
@@ -476,14 +476,7 @@ class HotkeyManager:
 
     def _gs_runner(self):
         """Return a gsettings runner function, or None if unavailable."""
-        in_flatpak = (
-            os.path.isfile("/.flatpak-info")
-            or "FLATPAK_ID" in os.environ
-            or os.environ.get("container") == "flatpak"
-            or any(p.startswith("/app/")
-                   for p in os.environ.get("PATH", "").split(":"))
-        )
-        if in_flatpak:
+        if is_flatpak():
             if not shutil.which("flatpak-spawn"):
                 return None
             use_flatpak = True
@@ -560,7 +553,7 @@ class HotkeyManager:
         # BazzCap is no longer capturing with any custom keybinding.
         self._restore_gnome_print_key(gs)
 
-    def _register_desktop_shortcuts(self):
+    def _register_desktop_shortcuts(self, notify_kde_relogin: bool = False):
         """Register shortcuts with GNOME or KDE."""
         if IS_MACOS:
             return  # macOS uses pynput only
@@ -568,7 +561,7 @@ class HotkeyManager:
         if "gnome" in desktop:
             self._register_gnome_shortcuts()
         elif "kde" in desktop or "plasma" in desktop:
-            self._register_kde_shortcuts()
+            self._register_kde_shortcuts(notify_relogin=notify_kde_relogin)
 
     def _register_gnome_shortcuts(self):
         """Register custom shortcuts via GNOME gsettings."""
@@ -735,7 +728,7 @@ class HotkeyManager:
 
         return "".join(parts)
 
-    def _register_kde_shortcuts(self):
+    def _register_kde_shortcuts(self, notify_relogin: bool = False):
         """Register custom shortcuts on KDE Plasma via .desktop shortcut files.
 
         Creates .desktop files in ~/.local/share/applications/ with
@@ -783,33 +776,16 @@ class HotkeyManager:
             except OSError:
                 continue
 
-            # Register via kglobalaccel D-Bus
-            try:
-                # Try qdbus6 first, then qdbus
-                qdbus = None
-                for tool in ("qdbus6", "qdbus"):
-                    if shutil.which(tool):
-                        qdbus = tool
-                        break
-
-                if qdbus:
-                    # Tell KDE to reload shortcuts from the .desktop file
-                    subprocess.run(
-                        [qdbus, "org.kde.KGlobalAccel",
-                         "/kglobalaccel",
-                         "org.kde.KGlobalAccel.blockGlobalShortcuts", "false"],
-                        capture_output=True, timeout=5,
-                        env=external_command_env(),
-                    )
-
-                # Also write to kglobalshortcutsrc as fallback
-                # (picked up on next login if D-Bus doesn't work)
-                kwrite = None
-                for tool in ("kwriteconfig6", "kwriteconfig5"):
-                    if shutil.which(tool):
-                        kwrite = tool
-                        break
-                if kwrite:
+            # Write shortcut to kglobalshortcutsrc so KDE picks it up
+            # on next login. Runtime registration via D-Bus is not reliable
+            # without the desktop file being indexed by KDE first.
+            kwrite = None
+            for tool in ("kwriteconfig6", "kwriteconfig5"):
+                if shutil.which(tool):
+                    kwrite = tool
+                    break
+            if kwrite:
+                try:
                     shortcut_val = f"{kde_combo},none,{display}"
                     subprocess.run(
                         [kwrite, "--file", "kglobalshortcutsrc",
@@ -818,20 +794,28 @@ class HotkeyManager:
                         capture_output=True, timeout=5,
                         env=external_command_env(),
                     )
-            except (subprocess.SubprocessError, OSError):
-                pass
+                except (subprocess.SubprocessError, OSError):
+                    pass
 
-        # Tell KDE to re-read configs
+        if notify_relogin:
+            self._kde_notify_relogin()
+
+    def _kde_notify_relogin(self):
+        """Show a desktop notification reminding KDE users to re-login."""
+        msg = (
+            "BazzCap hotkeys will be active after you log out and back in. "
+            "Captures from the tray menu work immediately."
+        )
         try:
             subprocess.run(
-                ["dbus-send", "--type=signal", "--dest=org.kde.KGlobalAccel",
-                 "/kglobalaccel", "org.kde.KGlobalAccel.yourShortcutsChanged",
-                 "array:string:"],
+                ["notify-send", "-a", "BazzCap", "-i", "dialog-information",
+                 "-t", "8000",
+                 "KDE Hotkeys: Re-login Required", msg],
                 capture_output=True, timeout=5,
                 env=external_command_env(),
             )
         except (subprocess.SubprocessError, OSError):
-            pass
+            print(f"[BazzCap] KDE hotkeys: {msg}", flush=True)
 
     def _unregister_kde_shortcuts(self):
         """Remove BazzCap shortcuts from KDE."""

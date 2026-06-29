@@ -14,6 +14,9 @@ if IS_MACOS:
         "capture_fullscreen": "<Super><Shift>1",
         "capture_region": "<Super><Shift>2",
         "capture_window": "<Super><Shift>6",
+        "capture_fullscreen_clipboard": "<Super><Shift>3",
+        "capture_region_clipboard": "<Super><Shift>4",
+        "capture_ocr": "<Super><Shift>5",
     }
     _CONFIG_DIR = os.path.expanduser("~/Library/Application Support/bazzcap")
 else:
@@ -21,6 +24,9 @@ else:
         "capture_fullscreen": "Print",
         "capture_region": "<Ctrl>Print",
         "capture_window": "<Alt>Print",
+        "capture_fullscreen_clipboard": "<Shift>Print",
+        "capture_region_clipboard": "<Ctrl><Shift>Print",
+        "capture_ocr": "<Super>Print",
     }
     _CONFIG_DIR = os.path.expanduser("~/.config/bazzcap")
 

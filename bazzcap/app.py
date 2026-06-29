@@ -9,6 +9,7 @@ import shlex
 from functools import partial
 
 IS_MACOS = sys.platform == "darwin"
+AUTOSTART_ENV_FLAG = "BAZZCAP_AUTOSTART"
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QSystemTrayIcon, QMenu,
@@ -33,7 +34,7 @@ from bazzcap.capture import (
     capture_fullscreen as _capture_fullscreen_to_file,
     capture_window as _capture_window_to_file,
 )
-from bazzcap.runtime import external_command_env
+from bazzcap.runtime import is_flatpak, is_frozen_bundle, external_command_env
 from bazzcap.clipboard import copy_image_to_clipboard
 from bazzcap.history import HistoryManager, HistoryEntry
 from bazzcap.hotkeys import HotkeyManager
@@ -249,13 +250,10 @@ class SettingsDialog(QDialog):
         _AUTOSTART_DIR = os.path.expanduser("~/Library/LaunchAgents")
         _AUTOSTART_FILE = os.path.join(_AUTOSTART_DIR, "com.bazzcap.plist")
         _BIN_PATH = "/usr/local/bin/bazzcap"
-        _LAUNCHER_DIR = os.path.expanduser("~/Library/Application Support/bazzcap")
     else:
         _AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
         _AUTOSTART_FILE = os.path.join(_AUTOSTART_DIR, "bazzcap.desktop")
         _BIN_PATH = os.path.expanduser("~/.local/bin/bazzcap")
-        _LAUNCHER_DIR = os.path.expanduser("~/.config/bazzcap")
-    _LAUNCHER_FILE = os.path.join(_LAUNCHER_DIR, "launch-bazzcap.sh")
 
     def _is_autostart_enabled(self) -> bool:
         return os.path.isfile(self._AUTOSTART_FILE)
@@ -267,24 +265,14 @@ class SettingsDialog(QDialog):
     def _launch_command(self) -> list[str]:
         if os.path.isfile(self._BIN_PATH) and os.access(self._BIN_PATH, os.X_OK):
             return [self._BIN_PATH]
+        if is_frozen_bundle():
+            return [sys.executable]
         return [sys.executable, self._source_entrypoint()]
-
-    def _ensure_launcher(self) -> str:
-        os.makedirs(self._LAUNCHER_DIR, exist_ok=True)
-        cmd = " ".join(shlex.quote(part) for part in self._launch_command())
-        script = (
-            "#!/bin/sh\n"
-            f"exec {cmd} \"$@\"\n"
-        )
-        with open(self._LAUNCHER_FILE, "w") as f:
-            f.write(script)
-        os.chmod(self._LAUNCHER_FILE, 0o755)
-        return self._LAUNCHER_FILE
 
     def _set_autostart(self, enabled: bool):
         if enabled:
             os.makedirs(self._AUTOSTART_DIR, exist_ok=True)
-            launcher = self._ensure_launcher()
+            cmd_parts = self._launch_command()
             if IS_MACOS:
                 plist = (
                     '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -293,19 +281,21 @@ class SettingsDialog(QDialog):
                     '<plist version="1.0">\n<dict>\n'
                     '  <key>Label</key>\n  <string>com.bazzcap</string>\n'
                     '  <key>ProgramArguments</key>\n  <array>\n'
-                    f'    <string>{launcher}</string>\n'
-                    '  </array>\n'
+                    + "".join(f'    <string>{shlex.quote(p)}</string>\n'
+                               for p in cmd_parts)
+                    + '  </array>\n'
                     '  <key>RunAtLoad</key>\n  <true/>\n'
                     '</dict>\n</plist>\n'
                 )
                 with open(self._AUTOSTART_FILE, "w") as f:
                     f.write(plist)
             else:
+                exec_str = " ".join(shlex.quote(p) for p in cmd_parts)
                 entry = (
                     "[Desktop Entry]\n"
                     "Name=BazzCap\n"
                     "Comment=Screenshot Tool\n"
-                    f"Exec={launcher}\n"
+                    f"Exec=env {AUTOSTART_ENV_FLAG}=1 {exec_str}\n"
                     "Icon=bazzcap\n"
                     "Terminal=false\n"
                     "Type=Application\n"
@@ -478,9 +468,14 @@ class MainWindow(QMainWindow):
         self._history = history
         self._editor_windows = []
         self._overlay = None
+        self._overlays = []
         self._tray_available = True
         self._capture_in_progress = False
         self._pending_capture_cursor = None
+        self._screenshot_worker = None
+        self._window_capture_worker = None
+        self._clipboard_only = False
+        self._ocr_mode = False
 
         self.setWindowTitle("BazzCap")
         if app_icon is not None and not app_icon.isNull():
@@ -769,18 +764,23 @@ class MainWindow(QMainWindow):
             return f"Hotkey: {display}"
         return "No hotkey configured"
 
-    def _start_capture(self, mode: str, cursor_pos=None):
-        logger.info("Capture requested: mode=%s cursor_pos=%s", mode, cursor_pos)
+    def _start_capture(self, mode: str, cursor_pos=None, clipboard_only: bool = False):
+        logger.info("Capture requested: mode=%s cursor_pos=%s clipboard_only=%s",
+                    mode, cursor_pos, clipboard_only)
         if self._capture_in_progress:
             logger.info("Capture request ignored; previous capture still in progress")
             return
         self._capture_in_progress = True
         self._pending_capture_cursor = cursor_pos
+        self._clipboard_only = clipboard_only
         self._was_visible = self.isVisible()
         self.hide()
         QApplication.processEvents()
 
-        if mode == "fullscreen":
+        if mode == "ocr":
+            self._ocr_mode = True
+            QTimer.singleShot(250, lambda: self._do_overlay_capture("region"))
+        elif mode == "fullscreen":
             QTimer.singleShot(250, self._do_fullscreen_capture)
         elif mode == "window":
             QTimer.singleShot(250, self._do_window_capture)
@@ -968,6 +968,26 @@ class MainWindow(QMainWindow):
         self._handle_captured_file(ok, path, "window", "Window captured & copied")
 
     def _handle_captured_file(self, ok, path, capture_type, success_title):
+        if getattr(self, '_clipboard_only', False):
+            self._clipboard_only = False
+            try:
+                if ok and os.path.isfile(path):
+                    copy_image_to_clipboard(path)
+                    self._notify("Screenshot copied to clipboard", "Not saved to disk")
+                    self._status.showMessage("Copied to clipboard (not saved)")
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                else:
+                    self._status.showMessage(f"{capture_type.capitalize()} capture failed!")
+            except Exception:
+                logger.exception("%s clipboard-only capture failed", capture_type)
+            finally:
+                self._capture_in_progress = False
+                if getattr(self, '_was_visible', False):
+                    self.show()
+            return
         try:
             if ok and os.path.isfile(path):
                 entry = HistoryEntry.create(path, "screenshot", capture_type)
@@ -1092,6 +1112,10 @@ class MainWindow(QMainWindow):
 
     def _save_and_notify(self, pixmap: QPixmap, capture_type: str = "region"):
         """Save a pixmap, add to history, copy to clipboard, and notify."""
+        if getattr(self, '_clipboard_only', False):
+            self._clipboard_only = False
+            self._save_clipboard_only(pixmap)
+            return
         try:
             if pixmap.isNull():
                 if getattr(self, '_was_visible', False):
@@ -1124,6 +1148,93 @@ class MainWindow(QMainWindow):
             if getattr(self, '_was_visible', False):
                 self.show()
 
+    def _save_clipboard_only(self, pixmap: QPixmap):
+        """Copy pixmap to clipboard without saving a file."""
+        import tempfile
+        try:
+            if pixmap.isNull():
+                if getattr(self, '_was_visible', False):
+                    self.show()
+                return
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = tmp.name
+            pixmap.save(tmp_path, "PNG")
+            copy_image_to_clipboard(tmp_path)
+            self._notify("Screenshot copied to clipboard", "Not saved to disk")
+            self._status.showMessage("Copied to clipboard (not saved)")
+        except Exception:
+            logger.exception("Clipboard-only capture failed")
+            self._status.showMessage("Clipboard copy failed. Check bazzcap.log")
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            self._capture_in_progress = False
+            if getattr(self, '_was_visible', False):
+                self.show()
+
+    def _do_ocr(self, pixmap: QPixmap):
+        """Run tesseract OCR on pixmap and copy extracted text to clipboard."""
+        import tempfile
+        tmp_path = None
+        try:
+            if pixmap.isNull():
+                if getattr(self, '_was_visible', False):
+                    self.show()
+                return
+
+            import shutil as _shutil
+            if not _shutil.which("tesseract"):
+                self._notify(
+                    "OCR: tesseract not found",
+                    "Install tesseract: sudo dnf install tesseract"
+                )
+                self._status.showMessage(
+                    "OCR failed: tesseract not installed"
+                )
+                self._capture_in_progress = False
+                if getattr(self, '_was_visible', False):
+                    self.show()
+                return
+
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = tmp.name
+            pixmap.save(tmp_path, "PNG")
+
+            import subprocess as _sp
+            result = _sp.run(
+                ["tesseract", tmp_path, "stdout", "--psm", "3"],
+                capture_output=True, text=True, timeout=30,
+            )
+            text = result.stdout.strip()
+
+            if not text:
+                self._notify("OCR: no text found", "Could not extract any text from region")
+                self._status.showMessage("OCR: no text found in selection")
+            else:
+                from bazzcap.clipboard import copy_text_to_clipboard
+                copy_text_to_clipboard(text)
+                preview = text[:60].replace("\n", " ")
+                if len(text) > 60:
+                    preview += "…"
+                self._notify("OCR: text copied to clipboard", preview)
+                self._status.showMessage(f"OCR: copied {len(text)} chars to clipboard")
+                logger.info("OCR extracted %d chars", len(text))
+
+        except Exception:
+            logger.exception("OCR failed")
+            self._status.showMessage("OCR failed. Check bazzcap.log")
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            self._capture_in_progress = False
+            if getattr(self, '_was_visible', False):
+                self.show()
+
     def _on_overlay_captured(self, pixmap: QPixmap):
         try:
             for ov in getattr(self, '_overlays', []):
@@ -1133,7 +1244,14 @@ class MainWindow(QMainWindow):
             self._overlays = []
             self._overlay = None
 
-            self._save_and_notify(pixmap, "region")
+            if getattr(self, '_ocr_mode', False):
+                self._ocr_mode = False
+                self._do_ocr(pixmap)
+            elif getattr(self, '_clipboard_only', False):
+                self._clipboard_only = False
+                self._save_clipboard_only(pixmap)
+            else:
+                self._save_and_notify(pixmap, "region")
         except Exception:
             logger.exception("Overlay completion crashed")
             self._status.showMessage("Capture finalize crashed. Check bazzcap.log")
@@ -1164,15 +1282,6 @@ class MainWindow(QMainWindow):
             self._status.showMessage(f"Editor error: {e}")
             self.show()
 
-    @staticmethod
-    def _in_flatpak() -> bool:
-        return (
-            os.path.isfile("/.flatpak-info")
-            or "FLATPAK_ID" in os.environ
-            or os.environ.get("container") == "flatpak"
-            or any(part.startswith("/app/") for part in os.environ.get("PATH", "").split(":"))
-        )
-
     def _open_path(self, path: str) -> bool:
         target = os.path.abspath(os.path.expanduser(path))
         if QDesktopServices.openUrl(QUrl.fromLocalFile(target)):
@@ -1182,7 +1291,7 @@ class MainWindow(QMainWindow):
         if IS_MACOS:
             commands.append(["open", target])
         else:
-            if self._in_flatpak():
+            if is_flatpak():
                 commands.append(["flatpak-spawn", "--host", "xdg-open", target])
             commands.append(["xdg-open", target])
 
@@ -1510,6 +1619,13 @@ class SystemTray(QSystemTrayIcon):
         menu.addAction("Region Capture", lambda: self.capture_requested.emit("region"))
         menu.addAction("Window Capture", lambda: self.capture_requested.emit("window"))
         menu.addSeparator()
+        menu.addAction("Fullscreen → Clipboard Only",
+                       lambda: self.capture_requested.emit("fullscreen_clipboard"))
+        menu.addAction("Region → Clipboard Only",
+                       lambda: self.capture_requested.emit("region_clipboard"))
+        menu.addAction("OCR — Copy Text from Region",
+                       lambda: self.capture_requested.emit("ocr"))
+        menu.addSeparator()
         menu.addAction("Show BazzCap", lambda: self.show_requested.emit())
         menu.addAction("Settings", lambda: self.settings_requested.emit())
         menu.addAction("Hotkeys", lambda: self.hotkey_settings_requested.emit())
@@ -1621,7 +1737,11 @@ class BazzCapApp:
     def _reregister_hotkeys(self):
         hotkeys = self.config.get("hotkeys", {})
         new_bindings = {}
-        for name in ["capture_fullscreen", "capture_region", "capture_window"]:
+        for name in [
+            "capture_fullscreen", "capture_region", "capture_window",
+            "capture_fullscreen_clipboard", "capture_region_clipboard",
+            "capture_ocr",
+        ]:
             combo = hotkeys.get(name, "")
             if combo:
                 new_bindings[name] = combo
@@ -1632,6 +1752,8 @@ class BazzCapApp:
 
         all_names = [
             "capture_fullscreen", "capture_region", "capture_window",
+            "capture_fullscreen_clipboard", "capture_region_clipboard",
+            "capture_ocr",
         ]
 
         for name in all_names:
@@ -1654,13 +1776,23 @@ class BazzCapApp:
             "capture_fullscreen": lambda: self.main_window._start_capture("fullscreen", cursor_pos),
             "capture_region": lambda: self.main_window._start_capture("region", cursor_pos),
             "capture_window": lambda: self.main_window._start_capture("window", cursor_pos),
+            "capture_fullscreen_clipboard": lambda: self.main_window._start_capture(
+                "fullscreen", cursor_pos, clipboard_only=True),
+            "capture_region_clipboard": lambda: self.main_window._start_capture(
+                "region", cursor_pos, clipboard_only=True),
+            "capture_ocr": lambda: self.main_window._start_capture("ocr", cursor_pos),
         }
         action = action_map.get(name)
         if action:
             action()
 
     def _tray_capture(self, mode: str):
-        self.main_window._start_capture(mode)
+        if mode == "fullscreen_clipboard":
+            self.main_window._start_capture("fullscreen", clipboard_only=True)
+        elif mode == "region_clipboard":
+            self.main_window._start_capture("region", clipboard_only=True)
+        else:
+            self.main_window._start_capture(mode)
 
     def _init_tray(self) -> bool:
         if self.tray is not None:
@@ -1711,7 +1843,12 @@ class BazzCapApp:
         if not getattr(self, "_single_instance_ok", True):
             return getattr(self, "_exit_code", 0)
         self._ensure_tray_ready()
-        should_start_visible = (not self.config.get("start_minimized", False)) or (self.tray is None) or (not self.tray.isVisible())
+        started_from_autostart = os.environ.get(AUTOSTART_ENV_FLAG) == "1"
+        tray_ready = self.tray is not None and self.tray.isVisible()
+        should_start_visible = (
+            not started_from_autostart
+            and (not self.config.get("start_minimized", True) or not tray_ready)
+        )
         if should_start_visible:
             self.main_window.show()
         try:

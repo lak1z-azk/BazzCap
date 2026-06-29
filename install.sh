@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="BazzCap"
+AUTOSTART_ENV_FLAG="BAZZCAP_AUTOSTART"
 INSTALL_DIR="$HOME/.local/share/bazzcap"
 VENV_DIR="$INSTALL_DIR/venv"
 BIN_DIR="$HOME/.local/bin"
@@ -335,7 +336,7 @@ cat > "$AUTOSTART_DIR/bazzcap.desktop" << AUTOSTART
 [Desktop Entry]
 Name=BazzCap
 Comment=Screenshot Tool
-Exec=$BIN_DIR/bazzcap
+Exec=env $AUTOSTART_ENV_FLAG=1 $BIN_DIR/bazzcap
 Icon=bazzcap
 Terminal=false
 Type=Application
