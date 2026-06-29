@@ -15,9 +15,10 @@ DIST_DIR="$ROOT_DIR/dist"
 PYI_DIST="$DIST_DIR/pyinstaller"
 PYI_BUILD="$ROOT_DIR/build/pyinstaller-macos"
 APP_BUNDLE="$PYI_DIST/$APP_NAME.app"
-ZIP_TARGET="$DIST_DIR/${APP_NAME}-${VERSION}-macOS.zip"
+DMG_TARGET="$DIST_DIR/${APP_NAME}-${VERSION}-macOS.dmg"
+DMG_STAGING="$DIST_DIR/dmg-staging"
 
-rm -rf "$PYI_DIST" "$PYI_BUILD" "$ZIP_TARGET"
+rm -rf "$PYI_DIST" "$PYI_BUILD" "$DMG_TARGET" "$DMG_STAGING"
 mkdir -p "$DIST_DIR"
 
 python3 -m pip install --upgrade pip
@@ -37,6 +38,18 @@ pyinstaller \
   --distpath "$PYI_DIST" \
   --workpath "$PYI_BUILD"
 
-ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$ZIP_TARGET"
+# Build a drag-to-install DMG
+mkdir -p "$DMG_STAGING"
+cp -r "$APP_BUNDLE" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
 
-printf "%s\n" "$ZIP_TARGET"
+hdiutil create \
+  -volname "$APP_NAME $VERSION" \
+  -srcfolder "$DMG_STAGING" \
+  -ov \
+  -format UDZO \
+  "$DMG_TARGET"
+
+rm -rf "$DMG_STAGING"
+
+printf "%s\n" "$DMG_TARGET"

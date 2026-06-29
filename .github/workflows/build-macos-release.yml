@@ -6,7 +6,11 @@ on:
       release_tag:
         description: "Existing release tag to upload macOS zip to"
         required: true
-        default: "v1.1.2"
+        default: "v1.2.0"
+      source_ref:
+        description: "Branch or tag to build from"
+        required: false
+        default: "main"
 
 permissions:
   contents: write
@@ -17,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -32,4 +38,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          files: dist/*-macOS.zip
+          files: dist/*-macOS.dmg
