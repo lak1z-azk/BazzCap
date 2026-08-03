@@ -27,6 +27,8 @@ mkdir -p "$DIST_DIR" "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
   "$APPDIR/usr/share/icons/hicolor/256x256/apps" \
   "$ROOT_DIR/build"
 
+python3 "$ROOT_DIR/scripts/sync_embedded_helper.py" --check
+
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt pyinstaller
 
@@ -44,6 +46,23 @@ pyinstaller \
   bazzcap.py \
   --distpath "$PYI_DIST" \
   --workpath "$PYI_BUILD"
+
+# Fail loudly if PyInstaller dropped the bundled data files.  A build that is
+# missing _portal_helper.py still starts and still passes a smoke test, but
+# every screenshot silently fails on Wayland — this shipped as 1.1.0.
+for required in \
+  "_internal/bazzcap/_portal_helper.py" \
+  "_internal/bazzcap/_trigger.py" \
+  "_internal/bazzcap/resources/bazzcap.svg" \
+  "_internal/bazzcap/resources/bazzcap.png" \
+; do
+  if [ ! -f "$PYI_DIST/$APP_NAME/$required" ]; then
+    echo "ERROR: build is missing required bundled file: $required" >&2
+    echo "Refusing to package a broken AppImage." >&2
+    exit 1
+  fi
+done
+echo "  ✓ Bundled data files verified"
 
 cp -r "$PYI_DIST/$APP_NAME" "$APPDIR/usr/bin/$APP_NAME"
 cp "$DESKTOP_SRC" "$APPDIR/$APP_NAME.desktop"

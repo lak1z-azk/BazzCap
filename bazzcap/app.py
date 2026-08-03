@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import logging
 import fcntl
+import re
 import shlex
 from functools import partial
 
@@ -43,6 +44,30 @@ from bazzcap.logging_utils import setup_logging, install_global_exception_handle
 
 
 logger = logging.getLogger(__name__)
+
+
+def _script_execs_dead_path(path: str) -> bool:
+    """True if *path* is a small shell script whose exec target is missing.
+
+    Only inspects plain-text scripts under a few KB; anything binary or large
+    is assumed fine.
+    """
+    try:
+        if os.path.getsize(path) > 8192:
+            return False
+        with open(path, "r", encoding="utf-8", errors="strict") as f:
+            content = f.read()
+    except (OSError, UnicodeDecodeError):
+        return False
+
+    if not content.startswith("#!"):
+        return False
+
+    for match in re.finditer(r"(?m)^\s*(?:exec\s+)?(/\S+)", content):
+        candidate = match.group(1)
+        if candidate.startswith("/tmp/.mount_") and not os.path.exists(candidate):
+            return True
+    return False
 
 
 def _fallback_app_icon() -> QIcon:
@@ -256,7 +281,42 @@ class SettingsDialog(QDialog):
         _BIN_PATH = os.path.expanduser("~/.local/bin/bazzcap")
 
     def _is_autostart_enabled(self) -> bool:
-        return os.path.isfile(self._AUTOSTART_FILE)
+        """True only if the autostart entry exists *and* still points at a
+        launchable binary.
+
+        A stale entry — e.g. one written from a previous AppImage run that baked
+        in a /tmp/.mount_XXXXXX path — is silently rewritten to the current
+        launch command so the checkbox never lies about a login that won't work.
+        """
+        if not os.path.isfile(self._AUTOSTART_FILE):
+            return False
+        if IS_MACOS:
+            return True
+        try:
+            with open(self._AUTOSTART_FILE) as f:
+                content = f.read()
+        except OSError:
+            return False
+
+        exec_line = ""
+        for line in content.splitlines():
+            if line.startswith("Exec="):
+                exec_line = line[len("Exec="):].strip()
+                break
+
+        if exec_line and self._exec_target_alive(exec_line):
+            return True
+
+        logger.warning(
+            "Autostart entry %s points at a missing target (%r); rewriting",
+            self._AUTOSTART_FILE, exec_line,
+        )
+        try:
+            self._set_autostart(True)
+        except OSError:
+            logger.exception("Could not repair autostart entry")
+            return False
+        return True
 
     @staticmethod
     def _source_entrypoint() -> str:
@@ -266,8 +326,45 @@ class SettingsDialog(QDialog):
         if os.path.isfile(self._BIN_PATH) and os.access(self._BIN_PATH, os.X_OK):
             return [self._BIN_PATH]
         if is_frozen_bundle():
+            # Inside an AppImage, sys.executable lives under the FUSE mount
+            # (/tmp/.mount_XXXXXX) which only exists while this process runs and
+            # gets a new random suffix each launch.  $APPIMAGE is the real,
+            # stable path to the .AppImage file — the only one worth persisting.
+            appimage = os.environ.get("APPIMAGE", "")
+            if appimage and os.path.isfile(appimage):
+                return [appimage]
             return [sys.executable]
         return [sys.executable, self._source_entrypoint()]
+
+    @staticmethod
+    def _exec_target_alive(exec_line: str) -> bool:
+        """Check whether an autostart Exec= line still resolves to a real file.
+
+        Handles the ``env VAR=1 /path/to/bin`` form written by _set_autostart.
+        """
+        try:
+            parts = shlex.split(exec_line)
+        except ValueError:
+            return False
+        if parts and parts[0] == "env":
+            parts = parts[1:]
+            while parts and "=" in parts[0] and not parts[0].startswith("/"):
+                parts = parts[1:]
+        if not parts:
+            return False
+        target = parts[0]
+        if os.path.isabs(target):
+            if not os.path.isfile(target):
+                return False
+        elif shutil.which(target) is None:
+            return False
+        else:
+            target = shutil.which(target)
+
+        # A wrapper script is only as alive as whatever it execs.  Older
+        # installs wrote a launch-bazzcap.sh pointing into a /tmp/.mount_XXXXXX
+        # AppImage mount, so the script exists while its target never does.
+        return not _script_execs_dead_path(target)
 
     def _set_autostart(self, enabled: bool):
         if enabled:
@@ -363,6 +460,12 @@ class _ScreenshotWorker(QThread):
             pixmap = grab_screenshot_via_portal(allow_screen_grab=False)
         except Exception:
             logger.exception("Screenshot worker failed")
+        if pixmap is None or pixmap.isNull():
+            from bazzcap.capture import detect_available_backends
+            logger.error(
+                "All screenshot backends failed. Available backends: %s",
+                ", ".join(detect_available_backends()) or "NONE",
+            )
         self.finished.emit(pixmap)
 
 
