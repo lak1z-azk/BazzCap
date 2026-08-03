@@ -70,6 +70,18 @@ def _script_execs_dead_path(path: str) -> bool:
     return False
 
 
+def _format_size(num_bytes: int) -> str:
+    """Human-readable byte count, e.g. '2.9 MB'."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(size)} B"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
 def _fallback_app_icon() -> QIcon:
     pixmap = QPixmap(32, 32)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -837,6 +849,16 @@ class MainWindow(QMainWindow):
         self._btn_delete_history.clicked.connect(self._delete_selected_history_item)
         history_actions.addWidget(self._btn_delete_history)
 
+        self._btn_delete_all_history = QPushButton("Delete All")
+        self._btn_delete_all_history.setObjectName("toolbarButton")
+        self._btn_delete_all_history.setFixedHeight(26)
+        self._btn_delete_all_history.setMinimumWidth(74)
+        self._btn_delete_all_history.setToolTip(
+            "Delete every capture in the list from disk"
+        )
+        self._btn_delete_all_history.clicked.connect(self._delete_all_history_items)
+        history_actions.addWidget(self._btn_delete_all_history)
+
         history_actions.addStretch()
 
         self._btn_remove_missing = QPushButton("Remove Missing")
@@ -1557,6 +1579,91 @@ class MainWindow(QMainWindow):
         self._refresh_history()
         self._status.showMessage(f"Removed: {name}")
 
+    def _delete_all_history_items(self):
+        """Delete every file in the history from disk, then clear the list."""
+        entries = self._history.entries
+        if not entries:
+            self._status.showMessage("History is already empty.")
+            return
+
+        present = [e.filepath for e in entries if os.path.isfile(e.filepath)]
+        missing_count = len(entries) - len(present)
+
+        total_bytes = 0
+        for path in present:
+            try:
+                total_bytes += os.path.getsize(path)
+            except OSError:
+                pass
+
+        if present:
+            message = (
+                f"Permanently delete {len(present)} capture"
+                f"{'s' if len(present) != 1 else ''} "
+                f"({_format_size(total_bytes)}) from disk?"
+            )
+            if missing_count:
+                message += (
+                    f"\n\n{missing_count} entr"
+                    f"{'ies are' if missing_count != 1 else 'y is'} "
+                    "already missing and will just be removed from the list."
+                )
+            message += "\n\nThis cannot be undone."
+        else:
+            message = (
+                f"All {missing_count} file"
+                f"{'s are' if missing_count != 1 else ' is'} already missing. "
+                "Clear the history list?"
+            )
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Delete All Captures")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(message)
+        delete_btn = box.addButton(
+            "Delete All" if present else "Clear List",
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is not delete_btn:
+            return
+
+        deleted = 0
+        failures: list[str] = []
+        for path in present:
+            try:
+                os.unlink(path)
+                deleted += 1
+            except OSError as e:
+                logger.warning("Could not delete %s: %s", path, e)
+                failures.append(path)
+
+        # Only forget entries whose file is actually gone, so anything that
+        # failed to delete stays visible and retryable.
+        for entry in entries:
+            if not os.path.isfile(entry.filepath):
+                self._history.remove(entry.filepath)
+
+        self._refresh_history()
+
+        if failures:
+            shown = ", ".join(os.path.basename(p) for p in failures[:3])
+            if len(failures) > 3:
+                shown += f" and {len(failures) - 3} more"
+            self._status.showMessage(
+                f"Deleted {deleted}; could not delete {len(failures)} ({shown}). "
+                "Check bazzcap.log"
+            )
+        elif deleted:
+            self._status.showMessage(
+                f"Deleted {deleted} capture{'s' if deleted != 1 else ''} "
+                f"({_format_size(total_bytes)} freed)"
+            )
+        else:
+            self._status.showMessage("History cleared.")
+
     def _remove_missing_history_items(self):
         missing = [entry.filepath for entry in self._history.entries if not os.path.isfile(entry.filepath)]
         if not missing:
@@ -1588,6 +1695,10 @@ class MainWindow(QMainWindow):
         delete_action = menu.addAction("Delete")
         delete_action.setEnabled(self._selected_history_raw_path() is not None)
         delete_action.triggered.connect(self._delete_selected_history_item)
+
+        delete_all_action = menu.addAction("Delete All")
+        delete_all_action.setEnabled(bool(self._history.entries))
+        delete_all_action.triggered.connect(self._delete_all_history_items)
 
         menu.exec(self._history_list.mapToGlobal(pos))
 
@@ -1634,8 +1745,27 @@ class MainWindow(QMainWindow):
             self._status.showMessage("Could not open save folder. Check bazzcap.log")
 
     def _clear_history(self):
+        """Forget every history entry. Files on disk are left alone."""
+        count = len(self._history.entries)
+        if not count:
+            self._status.showMessage("History is already empty.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Clear History",
+            f"Remove all {count} entr{'ies' if count != 1 else 'y'} from the "
+            "list?\n\nThe screenshot files stay on disk — use 'Delete All' to "
+            "erase them.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
         self._history.clear()
         self._refresh_history()
+        self._status.showMessage(f"Cleared {count} history entries")
 
     def _show_settings(self):
         dialog = SettingsDialog(self._config, self)
