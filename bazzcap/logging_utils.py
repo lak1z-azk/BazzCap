@@ -8,14 +8,10 @@ _LOG_FILE_HANDLE = None
 _LOG_FILE_PATH = None
 
 
-def _config_dir() -> str:
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Application Support/bazzcap")
-    return os.path.expanduser("~/.config/bazzcap")
-
-
 def get_log_file_path() -> str:
-    return os.path.join(_config_dir(), "bazzcap.log")
+    from bazzcap.runtime import config_dir
+
+    return os.path.join(config_dir(), "bazzcap.log")
 
 
 def setup_logging() -> str:

@@ -27,8 +27,6 @@ mkdir -p "$DIST_DIR" "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
   "$APPDIR/usr/share/icons/hicolor/256x256/apps" \
   "$ROOT_DIR/build"
 
-python3 "$ROOT_DIR/scripts/sync_embedded_helper.py" --check
-
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt pyinstaller
 

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=BazzCap
 Comment=Screenshot & Recording Tool for Linux
-Exec=python3 -m bazzcap
+Exec=bazzcap
 Icon=bazzcap
 Terminal=false
 Type=Application

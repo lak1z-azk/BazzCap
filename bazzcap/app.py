@@ -423,45 +423,6 @@ class SettingsDialog(QDialog):
 # Background workers — keep blocking subprocess work off the Qt main thread
 # ---------------------------------------------------------------------------
 
-def _mute_event_sounds():
-    """Temporarily disable GNOME event sounds. Returns previous value."""
-    if IS_MACOS:
-        return None
-    try:
-        r = subprocess.run(
-            ["gsettings", "get", "org.gnome.desktop.sound", "event-sounds"],
-            capture_output=True, text=True, timeout=3,
-            env=external_command_env(),
-        )
-        was_on = "true" in (r.stdout or "").lower()
-        if was_on:
-            subprocess.run(
-                ["gsettings", "set", "org.gnome.desktop.sound",
-                 "event-sounds", "false"],
-                capture_output=True, timeout=3,
-                env=external_command_env(),
-            )
-        return was_on
-    except (subprocess.SubprocessError, OSError):
-        return None
-
-
-def _restore_event_sounds(was_on):
-    """Restore GNOME event sounds to previous state."""
-    if IS_MACOS:
-        return
-    if was_on:
-        try:
-            subprocess.run(
-                ["gsettings", "set", "org.gnome.desktop.sound",
-                 "event-sounds", "true"],
-                capture_output=True, timeout=3,
-                env=external_command_env(),
-            )
-        except (subprocess.SubprocessError, OSError):
-            pass
-
-
 class _ScreenshotWorker(QThread):
     """Run screenshot capture off the Qt main thread (prefers grim)."""
     finished = pyqtSignal(object)
@@ -911,14 +872,6 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(250, self._do_window_capture)
         else:
             QTimer.singleShot(250, lambda: self._do_overlay_capture(mode))
-
-    @staticmethod
-    def _mute_event_sounds():
-        return _mute_event_sounds()
-
-    @staticmethod
-    def _restore_event_sounds(was_on):
-        _restore_event_sounds(was_on)
 
     def _stop_screenshot_worker(self):
         """Safely terminate any running screenshot worker thread."""

@@ -3,8 +3,9 @@
 import json
 import os
 import sys
-from pathlib import Path
 from datetime import datetime
+
+from bazzcap.runtime import config_dir
 
 IS_MACOS = sys.platform == "darwin"
 
@@ -18,7 +19,6 @@ if IS_MACOS:
         "capture_region_clipboard": "<Super><Shift>4",
         "capture_ocr": "<Super><Shift>5",
     }
-    _CONFIG_DIR = os.path.expanduser("~/Library/Application Support/bazzcap")
 else:
     _DEFAULT_HOTKEYS = {
         "capture_fullscreen": "Print",
@@ -28,7 +28,6 @@ else:
         "capture_region_clipboard": "<Ctrl><Shift>Print",
         "capture_ocr": "<Super>Print",
     }
-    _CONFIG_DIR = os.path.expanduser("~/.config/bazzcap")
 
 
 DEFAULT_CONFIG = {
@@ -36,9 +35,7 @@ DEFAULT_CONFIG = {
     "filename_pattern": "BazzCap_%Y-%m-%d_%H-%M-%S",
     "auto_copy_to_clipboard": True,
     "open_editor_after_capture": True,
-    "show_notification": True,
     "image_format": "png",
-    "jpeg_quality": 95,
 
     "hotkeys": dict(_DEFAULT_HOTKEYS),
     "editor": {
@@ -55,7 +52,7 @@ DEFAULT_CONFIG = {
     "theme": "system",
 }
 
-CONFIG_DIR = _CONFIG_DIR
+CONFIG_DIR = config_dir()
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
 

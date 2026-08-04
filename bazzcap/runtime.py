@@ -17,6 +17,12 @@ _FROZEN_ENV_KEYS = {
 }
 
 
+def config_dir() -> str:
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/bazzcap")
+    return os.path.expanduser("~/.config/bazzcap")
+
+
 def is_flatpak() -> bool:
     return (
         os.path.isfile("/.flatpak-info")

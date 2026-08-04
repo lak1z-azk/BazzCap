@@ -1,13 +1,11 @@
 import json
 import os
-import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
-if sys.platform == "darwin":
-    HISTORY_FILE = os.path.expanduser("~/Library/Application Support/bazzcap/history.json")
-else:
-    HISTORY_FILE = os.path.expanduser("~/.config/bazzcap/history.json")
+from bazzcap.runtime import config_dir
+
+HISTORY_FILE = os.path.join(config_dir(), "history.json")
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
