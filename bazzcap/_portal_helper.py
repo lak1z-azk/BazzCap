@@ -52,7 +52,11 @@ def screenshot(interactive=True):
         import dbus
         from dbus.mainloop.glib import DBusGMainLoop
         from gi.repository import GLib
-    except ImportError:
+    except ImportError as exc:
+        # Never fail silently here.  A bare exit(1) surfaces to the user as a
+        # generic "Failed to capture screen" with no way to tell that the real
+        # cause is a missing python module on the host.
+        print(f"portal helper unavailable: {exc}", file=sys.stderr)
         sys.exit(1)
 
     DBusGMainLoop(set_as_default=True)

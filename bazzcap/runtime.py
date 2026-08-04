@@ -75,6 +75,14 @@ def packaged_script_path(name: str) -> str:
 def iter_python_commands(prefer_host: bool = False) -> list[list[str]]:
     commands: list[list[str]] = []
 
+    # A frozen bundle ships its own dbus/gi, so re-executing ourselves is the
+    # only interpreter guaranteed to have them.  The system python3 usually
+    # does not: on an image-based desktop (Bazzite, Silverblue) dbus-python is
+    # not installed by default, which made every portal screenshot fail with a
+    # bare "Failed to capture screen".  Try ourselves first, always.
+    if is_frozen_bundle() and sys.executable:
+        commands.append([sys.executable, "--bazzcap-run-helper"])
+
     if prefer_host and shutil.which("flatpak-spawn"):
         commands.append(["flatpak-spawn", "--host", "/usr/bin/python3"])
         commands.append(["flatpak-spawn", "--host", "python3"])

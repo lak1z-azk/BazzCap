@@ -41,6 +41,11 @@ pyinstaller \
   --add-data "$ICON_PNG:bazzcap/resources" \
   --add-data "$ROOT_DIR/bazzcap/_portal_helper.py:bazzcap" \
   --add-data "$ROOT_DIR/bazzcap/_trigger.py:bazzcap" \
+  --hidden-import dbus \
+  --hidden-import dbus.mainloop \
+  --hidden-import dbus.mainloop.glib \
+  --hidden-import gi \
+  --hidden-import gi.repository.GLib \
   bazzcap.py \
   --distpath "$PYI_DIST" \
   --workpath "$PYI_BUILD"
@@ -61,6 +66,25 @@ for required in \
   fi
 done
 echo "  ✓ Bundled data files verified"
+
+# The portal backend is the only screenshot path that works on stock GNOME
+# Wayland, and it needs dbus + gi *inside* the bundle.  Run the imports through
+# the frozen binary's re-exec entrypoint: if they are missing, every capture
+# fails at runtime with no usable error (this is what shipped broken).
+DBUS_CHECK="$PYI_BUILD/_check_dbus.py"
+cat > "$DBUS_CHECK" <<'PY'
+import dbus
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import GLib
+print("dbus-ok")
+PY
+if "$PYI_DIST/$APP_NAME/$APP_NAME" --bazzcap-run-helper "$DBUS_CHECK" 2>&1 | grep -q "dbus-ok"; then
+  echo "  ✓ Bundled dbus/gi verified"
+else
+  echo "ERROR: bundled dbus/gi missing — portal screenshots would fail." >&2
+  echo "Refusing to package a broken AppImage." >&2
+  exit 1
+fi
 
 cp -r "$PYI_DIST/$APP_NAME" "$APPDIR/usr/bin/$APP_NAME"
 cp "$DESKTOP_SRC" "$APPDIR/$APP_NAME.desktop"

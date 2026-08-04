@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import shutil
@@ -8,6 +9,8 @@ from enum import Enum, auto
 from urllib.parse import unquote, urlparse
 
 from bazzcap.runtime import external_command_env, is_flatpak, iter_python_commands, packaged_script_path
+
+logger = logging.getLogger(__name__)
 
 IS_MACOS = sys.platform == "darwin"
 
@@ -69,6 +72,9 @@ def _portal_screenshot(interactive: bool = True) -> str | None:
                 path = result.stdout.strip()
                 if os.path.isfile(path):
                     return path
+            if result.stderr.strip():
+                logger.warning("portal helper (%s) failed: %s",
+                               " ".join(python_cmd), result.stderr.strip())
         except (subprocess.SubprocessError, OSError):
             continue
 
