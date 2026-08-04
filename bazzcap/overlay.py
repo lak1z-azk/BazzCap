@@ -17,7 +17,7 @@ import math
 import shutil
 import tempfile
 
-from bazzcap.runtime import external_command_env, iter_python_commands, packaged_script_path
+from bazzcap.runtime import external_command_env, is_flatpak, iter_python_commands, packaged_script_path
 
 from PyQt6.QtWidgets import (
     QWidget, QApplication, QLabel, QPushButton,
@@ -1024,9 +1024,10 @@ class RegionCaptureOverlay(QWidget):
             self._sel_rect = QRect(self._sel_start, self._sel_end).normalized()
 
             if self._sel_rect.width() < 5 or self._sel_rect.height() < 5:
+                # Click without a drag → take the whole screen (plus annotations).
                 self._has_selection = False
                 self._sel_rect = QRect()
-                self.update()
+                self._capture_fullscreen()
                 return
 
             self._has_selection = True
@@ -1265,11 +1266,20 @@ class RegionCaptureOverlay(QWidget):
         self.capture_completed.emit(result)
 
     def _capture_fullscreen(self):
+        """Finalize the whole screen + any annotations → emit."""
         if not self._active:
             return
         self.overlay_activated.emit(self)
+
+        result = self._screenshot.copy()
+        if self._annotations:
+            p = QPainter(result)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._paint_annotations(p)
+            p.end()
+
         self.hide()
-        self.capture_completed.emit(self._screenshot.copy())
+        self.capture_completed.emit(result)
 
     def _cancel(self):
         if not self._active:
@@ -1280,17 +1290,6 @@ class RegionCaptureOverlay(QWidget):
 
 
 # ─── Screenshot Grab ─────────────────────────────────────────────────────────
-
-def _is_flatpak() -> bool:
-    """Detect if we're running inside a Flatpak sandbox."""
-    return (
-        os.path.isfile("/.flatpak-info")
-        or "FLATPAK_ID" in os.environ
-        or os.environ.get("container") == "flatpak"
-        or any(p.startswith("/app/") for p in
-               os.environ.get("PATH", "").split(":"))
-    )
-
 
 def grab_screenshot_via_portal(*, allow_screen_grab: bool = True) -> QPixmap | None:
     """Take a fullscreen screenshot.
@@ -1347,7 +1346,7 @@ def grab_screenshot_via_portal(*, allow_screen_grab: bool = True) -> QPixmap | N
         return None
 
     helper = packaged_script_path("_portal_helper.py")
-    in_flatpak = _is_flatpak()
+    in_flatpak = is_flatpak()
     # Use a shared directory for temp files so host tools can write and
     # the Flatpak sandbox can read the result (/tmp is sandboxed).
     _shared_dir = None
