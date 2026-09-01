@@ -1,41 +1,66 @@
 # BazzCap
 
+> A fast, open-source screenshot and annotation tool for Linux and macOS — built with Python and PyQt6.
+
+[![Latest Release](https://img.shields.io/github/v/release/lak1z-azk/BazzCap?label=release)](https://github.com/lak1z-azk/BazzCap/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
 [![GUI: PyQt6](https://img.shields.io/badge/GUI-PyQt6-41cd52.svg)](https://www.riverbankcomputing.com/software/pyqt/)
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange.svg)]()
 [![Platform: macOS](https://img.shields.io/badge/Platform-macOS-lightgrey.svg)]()
 
-BazzCap is a desktop screenshot tool for Linux and macOS built with Python and PyQt6. It focuses on fast captures, built-in annotation, a clean dark UI, and a practical history workflow so you can keep working instead of juggling separate apps.
+BazzCap is a desktop screenshot tool for **Linux and macOS** focused on fast screen capture, built-in annotation, a clean dark UI, and a practical screenshot history workflow. It is a lightweight open-source alternative for users who want capture and editing in one application instead of juggling separate tools.
 
-It supports fullscreen, region, and window capture, lives in the tray/menu bar, copies captures to the clipboard automatically, and lets you re-open previous screenshots in a full editor without overwriting the original file.
+Capture a fullscreen, region, or window screenshot, annotate it with arrows, text, blur, highlights, shapes, or numbered steps, and automatically copy the result to your clipboard. Previous screenshots can be reopened in the built-in editor without overwriting the original file.
 
-## Highlights
+**Great for:** bug reports, documentation, tutorials, support tickets, development workflows, and quickly sharing annotated screenshots.
 
-- Fullscreen, region, and window capture
-- Built-in annotation overlay before saving
+## Download
+
+The easiest way to use BazzCap is through [GitHub Releases](https://github.com/lak1z-azk/BazzCap/releases/latest).
+
+- **Linux:** AppImage
+- **macOS:** packaged app builds when available
+- **Source:** Python 3.10+
+
+Linux AppImage:
+
+```bash
+chmod +x BazzCap-*.AppImage
+./BazzCap-*.AppImage
+```
+
+## Features
+
+- Fullscreen, region, and window screenshot capture
+- Built-in screenshot annotation before saving
 - Dedicated image editor for post-editing captures
-- Dark minimal main UI and dark editor theme
-- History actions: edit copy, open, duplicate, reveal, delete, remove missing
-- Global hotkeys on Linux desktop environments and fallback macOS support
+- Arrow, rectangle, ellipse, line, freehand, text, blur, highlight, and numbered-step tools
+- Crop and move annotations after placing them
+- Automatic clipboard copy
+- Screenshot history with edit, open, duplicate, reveal, and delete actions
+- Global configurable hotkeys
+- System tray / menu bar integration
 - Optional autostart on login
 - Single-instance protection
-- Automatic clipboard copy and desktop notifications
+- Desktop notifications
+- Dark UI and editor theme
+- Linux Wayland and X11 support
+- macOS support
 
 ## Capture Workflow
 
-BazzCap is designed around a simple flow:
+1. Trigger a capture from a hotkey, tray icon, or the main window.
+2. Select fullscreen, region, or window capture.
+3. Add annotations such as arrows, text, blur, highlights, shapes, or numbered steps.
+4. Save automatically to your configured folder and copy the result to the clipboard.
+5. Re-open previous captures from history and continue editing them as new copies.
 
-1. Trigger a capture from a hotkey, tray icon, or main window.
-2. Annotate before saving if you want to add arrows, text, blur, highlights, or steps.
-3. Save automatically to your configured folder and copy the result to the clipboard.
-4. Re-open any previous capture from the history panel and continue editing as a new copy.
-
-Region capture uses the full-screen overlay, while fullscreen and window capture remain one-click flows. The duplicate-save bug for selected captures has been fixed, so only the intended screenshot is kept.
+Region capture uses a full-screen overlay, while fullscreen and window capture remain quick one-click flows.
 
 ## Annotation Tools
 
-The capture overlay and image editor support the same practical markup toolbox:
+The capture overlay and image editor provide the same practical markup toolbox:
 
 - Arrow
 - Rectangle
@@ -52,7 +77,7 @@ You can move annotations after placing them, delete them, crop in the editor, co
 
 ## History and Editing
 
-The right side of the main window is a working history panel, not just a log.
+The right side of the main window is a working screenshot history panel rather than only a log.
 
 From recent captures you can:
 
@@ -85,27 +110,12 @@ Default macOS hotkeys:
 
 Hotkeys can be customized from the settings dialog.
 
-## Releases
+## Installation from Source
 
-GitHub Releases are the easiest way to grab packaged builds:
-
-- Linux: `AppImage`
-- macOS: zipped `.app` bundle
-
-Release page:
-
-```text
-https://github.com/ManCaveWasteland/BazzCap/releases
-```
-
-If you prefer source-based installation, use the installer scripts below.
-
-## Installation
-
-### Linux quick install
+### Linux
 
 ```bash
-git clone https://github.com/ManCaveWasteland/BazzCap.git
+git clone https://github.com/lak1z-azk/BazzCap.git
 cd BazzCap
 bash install.sh
 ```
@@ -119,10 +129,10 @@ The Linux installer will:
 - set up a launcher
 - optionally enable autostart on login
 
-### macOS quick install
+### macOS
 
 ```bash
-git clone https://github.com/ManCaveWasteland/BazzCap.git
+git clone https://github.com/lak1z-azk/BazzCap.git
 cd BazzCap
 bash install_macos.sh
 ```
@@ -136,10 +146,10 @@ The macOS installer will:
 - create a `BazzCap.app` bundle
 - register autostart with LaunchAgent
 
-### Manual run from source
+### Manual Python setup
 
 ```bash
-git clone https://github.com/ManCaveWasteland/BazzCap.git
+git clone https://github.com/lak1z-azk/BazzCap.git
 cd BazzCap
 python3 -m venv .venv
 source .venv/bin/activate
@@ -155,6 +165,8 @@ python3 bazzcap.py
 - Wayland or X11
 - GNOME or KDE Plasma recommended for the best hotkey integration
 - Common tools used by the app or installer: `xdotool`, `wl-clipboard`, `grim` or `spectacle`, `libnotify`
+
+BazzCap's packaged AppImage includes the dependencies required for its XDG Desktop Portal screenshot path, making it suitable for image-based Linux distributions such as Bazzite, Fedora Silverblue, and Kinoite.
 
 ### macOS
 
@@ -208,7 +220,11 @@ bash install_macos.sh --uninstall
 
 ## Contributing
 
-Issues, feature ideas, and pull requests are welcome. If you are reporting a bug, include your OS, desktop environment, display server, and the exact capture mode or editor action that failed.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidance.
+
+If you are reporting a bug, please include your operating system, desktop environment, display server, and the exact capture mode or editor action that failed.
+
+If BazzCap is useful to you, consider starring the repository — it helps other Linux and macOS users discover the project.
 
 ## License
 
